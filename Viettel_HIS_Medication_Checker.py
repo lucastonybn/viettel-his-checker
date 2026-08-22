@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
+# AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A4 AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A5 AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
 - Giữ nguyên logic kiểm tra thuốc của V79.
@@ -57,8 +58,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A4"
-APP_VERSION_CODE = 82604
+APP_VERSION = "82.6A5"
+APP_VERSION_CODE = 82605
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -2341,7 +2342,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A4 START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A5 START"
     )
     logger.info(
         "Python=%s",
@@ -2438,7 +2439,7 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A4 EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A5 EXIT"
         )
 
 if __name__ == "__main__":
