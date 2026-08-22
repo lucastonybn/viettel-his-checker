@@ -2,7 +2,7 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A11 HIS WINDOW FIX AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A12 STABLE ACTIVE WINDOW AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
 - Giữ nguyên logic kiểm tra thuốc của V79.
@@ -59,8 +59,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A11"
-APP_VERSION_CODE = 82611
+APP_VERSION = "82.6A12"
+APP_VERSION_CODE = 82612
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -307,7 +307,7 @@ def _validate_manifest(m):
 
 def _write_self_replace_helper(new_file, current_file):
     """
-    V82.6A11: helper Python tạm để replace + restart ổn định hơn trên Win7/Win10.
+    V82.6A12: helper Python tạm để replace + restart ổn định hơn trên Win7/Win10.
     Có log riêng: logs\\update_restart.log
     """
     pid = os.getpid()
@@ -927,6 +927,8 @@ ALLOWED_MEDICATION_SCREENS = (
     "TỜ ĐIỀU TRỊ",
     "KÊ ĐƠN NGOẠI TRÚ BHYT",
     "KÊ ĐƠN NGOẠI TRÚ",
+    "XUẤT TỦ TRỰC",
+    "XUAT TU TRUC",
 )
 
 # Các cửa sổ nghiệp vụ con phải chặn tuyệt đối, không dùng grace.
@@ -1057,59 +1059,69 @@ HIS_TITLE_KEYWORDS = (
     "TỜ ĐIỀU TRỊ",
     "KHÁM BỆNH",
     "KÊ ĐƠN",
-    "HỘI CHẨN"
+    "HỘI CHẨN",
+    "XUẤT TỦ TRỰC",
+    "XUAT TU TRUC"
 )
-
-def _window_title_from_hwnd(hwnd):
-    try:
-        length = user32.GetWindowTextLengthW(hwnd)
-        if length <= 0:
-            return ""
-
-        # buffer rộng hơn một chút để tránh title bị cắt ở một số máy cũ
-        size = max(length + 1, 512)
-        buf = ctypes.create_unicode_buffer(size)
-        user32.GetWindowTextW(hwnd, buf, size)
-        return norm_text(buf.value)
-    except Exception:
-        return ""
-
-
-def _window_area(hwnd):
-    try:
-        rect = wintypes.RECT()
-        if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-            w = max(0, rect.right - rect.left)
-            h = max(0, rect.bottom - rect.top)
-            return w * h
-    except Exception:
-        pass
-    return 0
-
 
 def find_his_hwnd_win32():
     """
-    V82.6A11:
-    Không lấy cửa sổ HIS đầu tiên EnumWindows gặp nữa.
+    V82.6A12 STABLE:
+    - Ưu tiên đúng cửa sổ foreground mà người dùng đang thao tác.
+    - Nếu foreground không phải màn kê thuốc HIS thì fallback đúng logic cũ.
 
-    Một số thời điểm HIS tạo thêm cửa sổ top-level title "Tờ điều trị"
-    hoặc popup con. Nếu chọn nhầm cửa sổ đó, UIA scan rất nhanh nhưng rows=0.
-
-    Chấm điểm tất cả cửa sổ HIS:
-      - ưu tiên title có VIETTEL-HIS
-      - ưu tiên đúng Tờ điều trị / Kê đơn ngoại trú
-      - ưu tiên cửa sổ lớn
-      - foreground được cộng điểm
+    Lý do: Viettel HIS có thể giữ nhiều top-level window cùng lúc.
+    Cách cũ EnumWindows lấy cửa sổ HIS đầu tiên nên đôi lúc chọn nhầm
+    cửa sổ cũ -> scan rất nhanh nhưng rows=0.
     """
-    candidates = []
-    fg = 0
 
+    # --------------------------------------------------------
+    # FAST / CORRECT PATH: foreground hiện tại
+    # --------------------------------------------------------
     try:
         fg = user32.GetForegroundWindow()
+
         if fg:
-            fg = user32.GetAncestor(fg, 2) or fg
-    except Exception:
-        fg = 0
+            root = user32.GetAncestor(fg, 2) or fg
+
+            length = user32.GetWindowTextLengthW(root)
+
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(
+                    max(length + 1, 512)
+                )
+                user32.GetWindowTextW(
+                    root,
+                    buf,
+                    len(buf)
+                )
+
+                title = norm_text(
+                    buf.value
+                ).upper()
+
+                # Chỉ nhận foreground nếu chính nó là màn checker hỗ trợ.
+                if any(
+                    screen in title
+                    for screen in ALLOWED_MEDICATION_SCREENS
+                ):
+                    logger.info(
+                        "HIS_WINDOW_FOREGROUND | hwnd=%s | title=%s",
+                        int(root),
+                        buf.value
+                    )
+                    return root
+
+    except Exception as e:
+        logger.warning(
+            "HIS_WINDOW_FOREGROUND_ERROR | %s",
+            e
+        )
+
+    # --------------------------------------------------------
+    # FALLBACK: nguyên cơ chế cũ, để giữ độ tương thích.
+    # --------------------------------------------------------
+    found = 0
 
     EnumProc = ctypes.WINFUNCTYPE(
         ctypes.c_bool,
@@ -1118,45 +1130,34 @@ def find_his_hwnd_win32():
     )
 
     def enum_cb(h, _):
+        nonlocal found
+
         try:
             if not user32.IsWindowVisible(h):
                 return True
 
-            title = _window_title_from_hwnd(h)
-            if not title:
+            length = user32.GetWindowTextLengthW(h)
+
+            if length <= 0:
                 return True
 
-            upper = title.upper()
-
-            # Chỉ ứng viên thật sự liên quan HIS.
-            if not any(k in upper for k in HIS_TITLE_KEYWORDS):
-                return True
-
-            score = 0
-
-            # Main HIS window nên thắng tuyệt đối các cửa sổ phụ.
-            if "VIETTEL-HIS" in upper:
-                score += 10000
-
-            # Đúng 2 màn checker được phép hoạt động.
-            if "TỜ ĐIỀU TRỊ" in upper:
-                score += 3000
-            if "KÊ ĐƠN NGOẠI TRÚ" in upper:
-                score += 3000
-            elif "KÊ ĐƠN" in upper:
-                score += 1000
-
-            # Foreground/root hiện tại được ưu tiên.
-            if fg and int(h) == int(fg):
-                score += 2000
-
-            # Cửa sổ chính thường có diện tích lớn hơn popup con.
-            area = _window_area(h)
-            score += min(area // 10000, 1000)
-
-            candidates.append(
-                (score, area, int(h), title)
+            buf = ctypes.create_unicode_buffer(
+                length + 1
             )
+            user32.GetWindowTextW(
+                h,
+                buf,
+                length + 1
+            )
+
+            title = buf.value.upper()
+
+            if any(
+                k in title
+                for k in HIS_TITLE_KEYWORDS
+            ):
+                found = h
+                return False
 
         except Exception:
             pass
@@ -1164,34 +1165,26 @@ def find_his_hwnd_win32():
         return True
 
     try:
-        user32.EnumWindows(EnumProc(enum_cb), 0)
+        user32.EnumWindows(
+            EnumProc(enum_cb),
+            0
+        )
     except Exception as e:
         logger.exception(
             "find_his_hwnd_win32 | %s",
             e
         )
 
-    if not candidates:
-        logger.warning("HIS_WINDOW_SELECT | no_candidate")
-        return 0
+    if found:
+        try:
+            logger.info(
+                "HIS_WINDOW_FALLBACK | hwnd=%s",
+                int(found)
+            )
+        except Exception:
+            pass
 
-    candidates.sort(
-        key=lambda x: (x[0], x[1]),
-        reverse=True
-    )
-
-    score, area, hwnd, title = candidates[0]
-
-    logger.info(
-        "HIS_WINDOW_SELECT | hwnd=%s | score=%s | area=%s | title=%s | candidates=%s",
-        hwnd,
-        score,
-        area,
-        title,
-        len(candidates)
-    )
-
-    return hwnd
+    return found
 
 # ============================================================
 # UIAUTOMATION EXCEPTIONS
@@ -1474,17 +1467,12 @@ class UIAutomationCore:
                 )
 
             if not all_rows:
-                try:
-                    selected_title = _window_title_from_hwnd(hwnd)
-                except Exception:
-                    selected_title = ""
-
                 logger.warning(
-                    "SCAN_ZERO_ROWS | hwnd=%s | selected_title=%s | header_found=%s | elements=%s",
+                    "SCAN_ZERO_ROWS | hwnd=%s | header_found=%s | elements=%s",
                     hwnd,
-                    selected_title,
                     bool(header),
-                    getattr(elements, "Length", -1) if elements is not None else -1
+                    getattr(elements, "Length", -1)
+                    if elements is not None else -1
                 )
 
             return all_rows
@@ -2551,7 +2539,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A11 HIS WINDOW FIX START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A12 STABLE ACTIVE WINDOW START"
     )
     logger.info(
         "Python=%s",
@@ -2648,7 +2636,7 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A11 HIS WINDOW FIX EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A12 STABLE ACTIVE WINDOW EXIT"
         )
 
 if __name__ == "__main__":
