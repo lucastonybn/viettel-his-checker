@@ -2,7 +2,7 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A6 TEST LOG FOLDER AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A7 TEST AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
 - Giữ nguyên logic kiểm tra thuốc của V79.
@@ -59,8 +59,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A6"
-APP_VERSION_CODE = 82606
+APP_VERSION = "82.6A7"
+APP_VERSION_CODE = 82607
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -404,6 +404,7 @@ def check_for_update(manual=False):
 
         current_file = os.path.abspath(sys.argv[0])
         new_file = os.path.join(_get_update_download_dir(), "Viettel_HIS_Medication_Checker.update.py")
+        logger.info("UPDATE_DOWNLOAD_PATH | %s", new_file)
 
         with open(new_file, "wb") as f:
             f.write(new_bytes)
@@ -2382,7 +2383,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A6 TEST LOG FOLDER START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A7 TEST START"
     )
     logger.info(
         "Python=%s",
@@ -2479,7 +2480,7 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A6 TEST LOG FOLDER EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A7 TEST EXIT"
         )
 
 if __name__ == "__main__":
