@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A5 AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A5 FIX RESTART AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
 - Giữ nguyên logic kiểm tra thuốc của V79.
@@ -252,29 +252,50 @@ def _validate_manifest(m):
     return version, version_code, url, sha256
 
 
-def _build_self_replace_command(new_file, current_file):
+def _write_self_replace_batch(new_file, current_file):
     """
-    Tạo lệnh CMD chạy sau khi checker thoát:
-    - đợi tiến trình hiện tại kết thúc
-    - backup file cũ
-    - thay bằng file mới
-    - mở lại bằng đúng Python/Pythonw hiện tại
+    Tạo file .cmd tạm nhiều dòng.
+    Win7/Win10 xử lý label/goto ổn định hơn nhiều so với CMD /c một dòng.
     """
     pid = os.getpid()
     backup = current_file + ".bak"
     pyexe = sys.executable
 
-    # Dùng tasklist vòng lặp để đợi PID hiện tại biến mất.
-    cmd = (
-        f'@echo off & '
-        f':wait & '
-        f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL & '
-        f'if not errorlevel 1 (ping 127.0.0.1 -n 2 >NUL & goto wait) & '
-        f'copy /Y "{current_file}" "{backup}" >NUL 2>&1 & '
-        f'move /Y "{new_file}" "{current_file}" >NUL & '
-        f'start "" "{pyexe}" "{current_file}"'
+    temp_dir = os.environ.get("TEMP") or os.path.dirname(current_file)
+    batch_file = os.path.join(
+        temp_dir,
+        f"viettel_his_update_{pid}.cmd"
     )
-    return cmd
+
+    batch_text = f"""@echo off
+setlocal
+:wait_old
+tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL
+if not errorlevel 1 (
+    ping 127.0.0.1 -n 2 >NUL
+    goto wait_old
+)
+
+copy /Y "{current_file}" "{backup}" >NUL 2>&1
+if errorlevel 1 goto failed
+
+move /Y "{new_file}" "{current_file}" >NUL 2>&1
+if errorlevel 1 goto failed
+
+start "" "{pyexe}" "{current_file}"
+goto cleanup
+
+:failed
+start "" "{pyexe}" "{current_file}"
+
+:cleanup
+del "%~f0"
+"""
+
+    with open(batch_file, "w", encoding="mbcs", errors="replace") as f:
+        f.write(batch_text)
+
+    return batch_file
 
 
 def _install_downloaded_update(new_file, version):
@@ -283,30 +304,41 @@ def _install_downloaded_update(new_file, version):
     if not current_file.lower().endswith(".py"):
         raise RuntimeError("Bản auto-update hiện tại hỗ trợ file .py")
 
-    cmd = _build_self_replace_command(new_file, current_file)
+    batch_file = _write_self_replace_batch(
+        new_file,
+        current_file
+    )
 
     logger.info(
-        "UPDATE_INSTALL_READY | current=%s | new=%s | version=%s",
+        "UPDATE_INSTALL_READY | current=%s | new=%s | batch=%s | version=%s",
         current_file,
         new_file,
+        batch_file,
         version
     )
 
+    # Chạy helper batch độc lập. Nó sẽ đợi process hiện tại thoát,
+    # thay file rồi mở lại checker.
     subprocess.Popen(
-        ["cmd.exe", "/c", cmd],
+        ["cmd.exe", "/c", batch_file],
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         close_fds=True
     )
 
-    # Đóng checker hiện tại; CMD sẽ thay file rồi mở lại.
+    # Thoát Tk mainloop một cách dứt khoát.
     try:
+        shutdown_event.set()
+
         if app_tk_root:
-            app_tk_root.after(0, shutdown)
-            app_tk_root.after(150, app_tk_root.quit)
+            app_tk_root.after(0, app_tk_root.quit)
         else:
-            shutdown()
+            raise SystemExit
     except Exception:
-        shutdown()
+        try:
+            if app_tk_root:
+                app_tk_root.quit()
+        except Exception:
+            pass
 
 
 def check_for_update(manual=False):
@@ -2342,7 +2374,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A5 START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A5 FIX RESTART START"
     )
     logger.info(
         "Python=%s",
@@ -2439,7 +2471,7 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A5 EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A5 FIX RESTART EXIT"
         )
 
 if __name__ == "__main__":
