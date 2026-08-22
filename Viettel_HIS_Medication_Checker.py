@@ -2,7 +2,7 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A8 LOG ARCHIVE AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A9 CLEAN DESKTOP AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
 - Giữ nguyên logic kiểm tra thuốc của V79.
@@ -59,8 +59,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A8"
-APP_VERSION_CODE = 82608
+APP_VERSION = "82.6A9"
+APP_VERSION_CODE = 82609
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -110,6 +110,55 @@ if not logger.handlers:
     )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+
+
+# ============================================================
+# CLEAN LEGACY UPDATE FILES
+# ============================================================
+
+def _cleanup_legacy_update_files():
+    """
+    Dọn các file updater cũ từng nằm cạnh checker.
+    File chính Viettel_HIS_Medication_Checker.py vẫn phải ở vị trí chạy chương trình.
+    """
+    try:
+        backup_dir = os.path.join(LOG_DIR, "backup")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        legacy_state = os.path.join(APP_DIR, ".update_state.json")
+        if os.path.isfile(legacy_state):
+            target = os.path.join(LOG_DIR, ".update_state.json")
+            try:
+                if not os.path.exists(target):
+                    os.replace(legacy_state, target)
+                else:
+                    os.remove(legacy_state)
+            except Exception:
+                pass
+
+        legacy_bak = os.path.abspath(sys.argv[0]) + ".bak"
+        if os.path.isfile(legacy_bak):
+            target = os.path.join(
+                backup_dir,
+                "Viettel_HIS_Medication_Checker.previous.py"
+            )
+            try:
+                os.replace(legacy_bak, target)
+            except Exception:
+                pass
+
+        legacy_update = os.path.abspath(sys.argv[0]) + ".update_new.py"
+        if os.path.isfile(legacy_update):
+            try:
+                os.remove(legacy_update)
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.warning("UPDATE_CLEANUP_FAILED | %s", e)
+
+
+_cleanup_legacy_update_files()
 
 # ============================================================
 # ADMIN
@@ -262,7 +311,16 @@ def _write_self_replace_batch(new_file, current_file):
     Win7/Win10 xử lý label/goto ổn định hơn nhiều so với CMD /c một dòng.
     """
     pid = os.getpid()
-    backup = current_file + ".bak"
+    backup_dir = os.path.join(
+        os.path.dirname(current_file),
+        "logs",
+        "backup"
+    )
+    os.makedirs(backup_dir, exist_ok=True)
+    backup = os.path.join(
+        backup_dir,
+        "Viettel_HIS_Medication_Checker.previous.py"
+    )
     pyexe = sys.executable
 
     temp_dir = os.environ.get("TEMP") or os.path.dirname(current_file)
@@ -2410,7 +2468,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A8 LOG ARCHIVE START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A9 CLEAN DESKTOP START"
     )
     logger.info(
         "Python=%s",
@@ -2507,7 +2565,7 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A8 LOG ARCHIVE EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A9 CLEAN DESKTOP EXIT"
         )
 
 if __name__ == "__main__":
