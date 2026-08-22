@@ -2,7 +2,7 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A7 TEST AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A8 LOG ARCHIVE AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
 - Giữ nguyên logic kiểm tra thuốc của V79.
@@ -59,8 +59,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A7"
-APP_VERSION_CODE = 82607
+APP_VERSION = "82.6A8"
+APP_VERSION_CODE = 82608
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -76,6 +76,7 @@ UPDATE_CHECK_HOUR = 1   # 01:00 mỗi ngày
 UPDATE_TIMEOUT = 12
 UPDATE_STATE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(sys.argv[0])),
+    "logs",
     ".update_state.json"
 )
 
@@ -216,6 +217,7 @@ def _http_get_bytes(url):
 
 def _load_update_state():
     try:
+        os.makedirs(os.path.dirname(UPDATE_STATE_FILE), exist_ok=True)
         with open(UPDATE_STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
@@ -224,6 +226,7 @@ def _load_update_state():
 
 def _save_update_state(data):
     try:
+        os.makedirs(os.path.dirname(UPDATE_STATE_FILE), exist_ok=True)
         tmp = UPDATE_STATE_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -370,6 +373,17 @@ def check_for_update(manual=False):
         manifest = json.loads(raw.decode("utf-8-sig"))
         version, version_code, download_url, expected_sha = _validate_manifest(manifest)
 
+        # Giữ lại manifest mới nhất trong logs để dễ kiểm tra.
+        os.makedirs(LOG_DIR, exist_ok=True)
+        manifest_copy = os.path.join(LOG_DIR, "version.json")
+        with open(manifest_copy, "wb") as f:
+            f.write(raw)
+
+        logger.info(
+            "UPDATE_MANIFEST_SAVED | %s",
+            manifest_copy
+        )
+
         state = _load_update_state()
         state["last_check"] = datetime.datetime.now().isoformat(timespec="seconds")
         state["last_seen_version"] = version
@@ -424,6 +438,19 @@ def check_for_update(manual=False):
             version,
             len(new_bytes),
             actual_sha
+        )
+
+        # Giữ lại 1 bản checker đã tải trong logs.
+        archive_file = os.path.join(
+            LOG_DIR,
+            f"Viettel_HIS_Medication_Checker_{version}.py"
+        )
+        with open(archive_file, "wb") as f:
+            f.write(new_bytes)
+
+        logger.info(
+            "UPDATE_ARCHIVE_SAVED | %s",
+            archive_file
         )
 
         if manual:
@@ -2383,7 +2410,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A7 TEST START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A8 LOG ARCHIVE START"
     )
     logger.info(
         "Python=%s",
@@ -2480,7 +2507,7 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A7 TEST EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A8 LOG ARCHIVE EXIT"
         )
 
 if __name__ == "__main__":
