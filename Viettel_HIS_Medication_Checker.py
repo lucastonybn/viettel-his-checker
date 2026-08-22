@@ -2,7 +2,7 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A9 CLEAN DESKTOP AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A10 ROBUST RESTART AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
 - Giữ nguyên logic kiểm tra thuốc của V79.
@@ -59,8 +59,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A9"
-APP_VERSION_CODE = 82609
+APP_VERSION = "82.6A10"
+APP_VERSION_CODE = 82610
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -305,59 +305,36 @@ def _validate_manifest(m):
     return version, version_code, url, sha256
 
 
-def _write_self_replace_batch(new_file, current_file):
+def _write_self_replace_helper(new_file, current_file):
     """
-    Tạo file .cmd tạm nhiều dòng.
-    Win7/Win10 xử lý label/goto ổn định hơn nhiều so với CMD /c một dòng.
+    V82.6A10: helper Python tạm để replace + restart ổn định hơn trên Win7/Win10.
+    Có log riêng: logs\\update_restart.log
     """
     pid = os.getpid()
-    backup_dir = os.path.join(
-        os.path.dirname(current_file),
-        "logs",
-        "backup"
-    )
+    app_dir = os.path.dirname(current_file)
+
+    backup_dir = os.path.join(app_dir, "logs", "backup")
     os.makedirs(backup_dir, exist_ok=True)
     backup = os.path.join(
         backup_dir,
         "Viettel_HIS_Medication_Checker.previous.py"
     )
+
+    restart_log = os.path.join(app_dir, "logs", "update_restart.log")
+
     pyexe = sys.executable
+    pyw_candidate = os.path.join(os.path.dirname(pyexe), "pythonw.exe")
+    restart_exe = pyw_candidate if os.path.isfile(pyw_candidate) else pyexe
 
-    temp_dir = os.environ.get("TEMP") or os.path.dirname(current_file)
-    batch_file = os.path.join(
-        temp_dir,
-        f"viettel_his_update_{pid}.cmd"
-    )
+    temp_dir = os.environ.get("TEMP") or app_dir
+    helper_file = os.path.join(temp_dir, f"viettel_his_update_{pid}.py")
 
-    batch_text = f"""@echo off
-setlocal
-:wait_old
-tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL
-if not errorlevel 1 (
-    ping 127.0.0.1 -n 2 >NUL
-    goto wait_old
-)
+    helper_code = '# -*- coding: utf-8 -*-\nimport os\nimport sys\nimport time\nimport shutil\nimport ctypes\nimport subprocess\nimport traceback\n\ncurrent_file = sys.argv[1]\nnew_file = sys.argv[2]\nbackup = sys.argv[3]\nrestart_exe = sys.argv[4]\nold_pid = int(sys.argv[5])\nlog_file = sys.argv[6]\n\ndef log(msg):\n    try:\n        os.makedirs(os.path.dirname(log_file), exist_ok=True)\n        with open(log_file, "a", encoding="utf-8") as f:\n            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " | " + msg + "\\n")\n    except Exception:\n        pass\n\ntry:\n    log("HELPER_START | pid=%s" % old_pid)\n\n    SYNCHRONIZE = 0x00100000\n    kernel32 = ctypes.windll.kernel32\n    h = kernel32.OpenProcess(SYNCHRONIZE, False, old_pid)\n\n    if h:\n        rc = kernel32.WaitForSingleObject(h, 30000)\n        kernel32.CloseHandle(h)\n        log("WAIT_OLD_DONE | rc=%s" % rc)\n    else:\n        log("WAIT_OLD_OPENPROCESS_FAILED_ASSUME_EXITED")\n\n    time.sleep(0.5)\n\n    replaced = False\n    last_error = ""\n\n    for attempt in range(1, 21):\n        try:\n            if os.path.exists(current_file):\n                try:\n                    os.makedirs(os.path.dirname(backup), exist_ok=True)\n                    shutil.copy2(current_file, backup)\n                except Exception as e:\n                    log("BACKUP_WARN | attempt=%s | %r" % (attempt, e))\n\n            os.replace(new_file, current_file)\n            replaced = True\n            log("REPLACE_OK | attempt=%s" % attempt)\n            break\n\n        except Exception as e:\n            last_error = repr(e)\n            log("REPLACE_RETRY | attempt=%s | %s" % (attempt, last_error))\n            time.sleep(0.4)\n\n    if not replaced:\n        raise RuntimeError("Không thay được file sau 20 lần: " + last_error)\n\n    if not os.path.isfile(current_file):\n        raise RuntimeError("File chính không tồn tại sau replace")\n\n    time.sleep(0.3)\n\n    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)\n    p = subprocess.Popen(\n        [restart_exe, current_file],\n        cwd=os.path.dirname(current_file),\n        creationflags=flags,\n        close_fds=True\n    )\n\n    log("RESTART_OK | exe=%s | new_pid=%s" % (restart_exe, p.pid))\n\nexcept Exception:\n    log("HELPER_FATAL | " + traceback.format_exc().replace("\\n", " || "))\n\nfinally:\n    try:\n        os.remove(__file__)\n    except Exception:\n        pass\n'
 
-copy /Y "{current_file}" "{backup}" >NUL 2>&1
-if errorlevel 1 goto failed
+    with open(helper_file, "w", encoding="utf-8") as f:
+        f.write(helper_code)
 
-move /Y "{new_file}" "{current_file}" >NUL 2>&1
-if errorlevel 1 goto failed
-
-start "" "{pyexe}" "{current_file}"
-goto cleanup
-
-:failed
-start "" "{pyexe}" "{current_file}"
-
-:cleanup
-del "%~f0"
-"""
-
-    with open(batch_file, "w", encoding="mbcs", errors="replace") as f:
-        f.write(batch_text)
-
-    return batch_file
+    return helper_file, backup, restart_exe, restart_log
 
 
 def _install_downloaded_update(new_file, version):
@@ -366,41 +343,42 @@ def _install_downloaded_update(new_file, version):
     if not current_file.lower().endswith(".py"):
         raise RuntimeError("Bản auto-update hiện tại hỗ trợ file .py")
 
-    batch_file = _write_self_replace_batch(
-        new_file,
-        current_file
+    helper_file, backup, restart_exe, restart_log = (
+        _write_self_replace_helper(new_file, current_file)
     )
 
     logger.info(
-        "UPDATE_INSTALL_READY | current=%s | new=%s | batch=%s | version=%s",
+        "UPDATE_INSTALL_READY | current=%s | new=%s | helper=%s | restart_exe=%s | restart_log=%s | version=%s",
         current_file,
         new_file,
-        batch_file,
+        helper_file,
+        restart_exe,
+        restart_log,
         version
     )
 
-    # Chạy helper batch độc lập. Nó sẽ đợi process hiện tại thoát,
-    # thay file rồi mở lại checker.
     subprocess.Popen(
-        ["cmd.exe", "/c", batch_file],
+        [
+            sys.executable,
+            helper_file,
+            current_file,
+            new_file,
+            backup,
+            restart_exe,
+            str(os.getpid()),
+            restart_log
+        ],
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         close_fds=True
     )
 
-    # Thoát Tk mainloop một cách dứt khoát.
-    try:
-        shutdown_event.set()
+    shutdown_event.set()
 
+    try:
         if app_tk_root:
             app_tk_root.after(0, app_tk_root.quit)
-        else:
-            raise SystemExit
     except Exception:
-        try:
-            if app_tk_root:
-                app_tk_root.quit()
-        except Exception:
-            pass
+        pass
 
 
 def _get_update_download_dir():
@@ -2468,7 +2446,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A9 CLEAN DESKTOP START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A10 ROBUST RESTART START"
     )
     logger.info(
         "Python=%s",
@@ -2565,7 +2543,7 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A9 CLEAN DESKTOP EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A10 ROBUST RESTART EXIT"
         )
 
 if __name__ == "__main__":
