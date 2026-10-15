@@ -2,12 +2,13 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A13 (HOTFIX) NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A14 (HOTFIX) NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
+- Fix lỗi chạy nhiều instance cùng lúc (Single Instance).
+- Giữ nguyên tính năng tự động update lúc 1h sáng (đã có sẵn).
 - Sửa lỗi bắt nhầm "1g" (1 gam) thành 1 giờ (01:00) trong Cách dùng.
 - Sửa lỗi không đọc được DVT trong ngoặc vuông do có dấu cách (VD: "[ 1 viên /ngày]").
-- Giữ nguyên toàn bộ logic V82.6A12 cũ.
 """
 
 import sys
@@ -54,8 +55,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A13"
-APP_VERSION_CODE = 82613
+APP_VERSION = "82.6A14"
+APP_VERSION_CODE = 82614
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -105,6 +106,32 @@ if not logger.handlers:
     )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+
+
+# ============================================================
+# SINGLE INSTANCE CHECK (CHỐNG MỞ NHIỀU APP)
+# ============================================================
+_app_mutex = None
+
+def enforce_single_instance():
+    global _app_mutex
+    # Mã lỗi 183 = ERROR_ALREADY_EXISTS
+    ERROR_ALREADY_EXISTS = 183
+    mutex_name = "ViettelHISChecker_SingleInstance_Mutex_V82"
+    _app_mutex = kernel32.CreateMutexW(None, False, mutex_name)
+    
+    if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        # Đã có 1 bản đang chạy -> Hiện thông báo rồi tự tắt bản mới này.
+        logger.warning("APP_ALREADY_RUNNING | Exiting new instance.")
+        user32.MessageBoxW(
+            0, 
+            "Phần mềm Viettel HIS Checker ĐANG ĐƯỢC CHẠY NGẦM rồi!\n\n"
+            "Vui lòng kiểm tra biểu tượng ứng dụng ở góc dưới cùng bên phải màn hình (chỗ xem giờ). "
+            "Bạn không cần mở thêm nữa.", 
+            "Thông báo", 
+            0x40 # MB_ICONINFORMATION
+        )
+        sys.exit(0)
 
 
 # ============================================================
@@ -1050,7 +1077,7 @@ def find_his_hwnd_win32():
 
     Lý do: Viettel HIS có thể giữ nhiều top-level window cùng lúc.
     Cách cũ EnumWindows lấy cửa sổ HIS đầu tiên nên đôi lúc chọn nhầm
-    cửa sổ cũ -> scan rất nhanh nhưng rows=0.
+    cửa sổ cũ -> scan nhanh nhưng rows=0.
     """
 
     # --------------------------------------------------------
@@ -2509,6 +2536,8 @@ def shutdown():
 # ============================================================
 
 def main():
+    # ---- Thêm code kiểm tra mở nhiều lần ở ngay đầu main ----
+    enforce_single_instance()
 
     global app_tk_root
     global toast_mgr
@@ -2517,7 +2546,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A13 NO ADMIN TEST START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A14 NO ADMIN TEST START"
     )
     logger.info(
         "Python=%s",
@@ -2614,9 +2643,8 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A13 NO ADMIN TEST EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A14 NO ADMIN TEST EXIT"
         )
 
 if __name__ == "__main__":
     main()
-
