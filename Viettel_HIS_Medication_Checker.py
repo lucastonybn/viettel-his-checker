@@ -2,11 +2,11 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A14 (HOTFIX) NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A15 (HOTFIX) NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
-- Fix lỗi chạy nhiều instance cùng lúc (Single Instance).
-- Giữ nguyên tính năng tự động update lúc 1h sáng (đã có sẵn).
+- Fix lỗi update bị chặn bởi Single Instance (Mutex).
+- Giữ nguyên tính năng tự động update lúc 1h sáng.
 - Sửa lỗi bắt nhầm "1g" (1 gam) thành 1 giờ (01:00) trong Cách dùng.
 - Sửa lỗi không đọc được DVT trong ngoặc vuông do có dấu cách (VD: "[ 1 viên /ngày]").
 """
@@ -55,8 +55,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A14"
-APP_VERSION_CODE = 82614
+APP_VERSION = "82.6A15"
+APP_VERSION_CODE = 82615
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -115,13 +115,16 @@ _app_mutex = None
 
 def enforce_single_instance():
     global _app_mutex
-    # Mã lỗi 183 = ERROR_ALREADY_EXISTS
+    # Bỏ qua check mutex nếu đang restart từ updater
+    if len(sys.argv) > 1 and "update_restart" in sys.argv:
+        logger.info("APP_START | Bypassing Mutex check during auto-update restart.")
+        return
+
     ERROR_ALREADY_EXISTS = 183
     mutex_name = "ViettelHISChecker_SingleInstance_Mutex_V82"
     _app_mutex = kernel32.CreateMutexW(None, False, mutex_name)
     
     if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
-        # Đã có 1 bản đang chạy -> Hiện thông báo rồi tự tắt bản mới này.
         logger.warning("APP_ALREADY_RUNNING | Exiting new instance.")
         user32.MessageBoxW(
             0, 
@@ -129,9 +132,21 @@ def enforce_single_instance():
             "Vui lòng kiểm tra biểu tượng ứng dụng ở góc dưới cùng bên phải màn hình (chỗ xem giờ). "
             "Bạn không cần mở thêm nữa.", 
             "Thông báo", 
-            0x40 # MB_ICONINFORMATION
+            0x40
         )
         sys.exit(0)
+
+def release_single_instance():
+    """Giải phóng Mutex để bản mới có thể chạy lên được sau khi bản này thoát."""
+    global _app_mutex
+    if _app_mutex:
+        try:
+            kernel32.ReleaseMutex(_app_mutex)
+            kernel32.CloseHandle(_app_mutex)
+            _app_mutex = None
+            logger.info("MUTEX_RELEASED")
+        except Exception as e:
+            logger.error("MUTEX_RELEASE_ERROR | %s", e)
 
 
 # ============================================================
@@ -139,10 +154,6 @@ def enforce_single_instance():
 # ============================================================
 
 def _cleanup_legacy_update_files():
-    """
-    Dọn các file updater cũ từng nằm cạnh checker.
-    File chính Viettel_HIS_Medication_Checker.py vẫn phải ở vị trí chạy chương trình.
-    """
     try:
         backup_dir = os.path.join(LOG_DIR, "backup")
         os.makedirs(backup_dir, exist_ok=True)
@@ -185,11 +196,6 @@ _cleanup_legacy_update_files()
 # ============================================================
 # NO ADMIN TEST
 # ============================================================
-
-# Bản test này KHÔNG tự xin quyền Administrator / KHÔNG hiện UAC.
-# Checker sẽ chạy cùng mức quyền với tài khoản Windows hiện tại.
-# Lưu ý: nếu Viettel HIS đang được chạy "Run as administrator" thì
-# Windows có thể hạn chế UI Automation từ checker không-admin.
 
 logger.info("NO_ADMIN_MODE | elevation_request=disabled")
 
@@ -234,7 +240,6 @@ except Exception as e:
 # ============================================================
 
 def _show_info(title, message):
-    """Hiện thông báo an toàn từ Tk main thread nếu có thể."""
     try:
         from tkinter import messagebox
         if app_tk_root:
@@ -308,10 +313,6 @@ def _validate_manifest(m):
 
 
 def _write_self_replace_helper(new_file, current_file):
-    """
-    V82.6A12: helper Python tạm để replace + restart ổn định hơn trên Win7/Win10.
-    Có log riêng: logs\\update_restart.log
-    """
     pid = os.getpid()
     app_dir = os.path.dirname(current_file)
 
@@ -331,7 +332,7 @@ def _write_self_replace_helper(new_file, current_file):
     temp_dir = os.environ.get("TEMP") or app_dir
     helper_file = os.path.join(temp_dir, f"viettel_his_update_{pid}.py")
 
-    helper_code = '# -*- coding: utf-8 -*-\nimport os\nimport sys\nimport time\nimport shutil\nimport ctypes\nimport subprocess\nimport traceback\n\ncurrent_file = sys.argv[1]\nnew_file = sys.argv[2]\nbackup = sys.argv[3]\nrestart_exe = sys.argv[4]\nold_pid = int(sys.argv[5])\nlog_file = sys.argv[6]\n\ndef log(msg):\n    try:\n        os.makedirs(os.path.dirname(log_file), exist_ok=True)\n        with open(log_file, "a", encoding="utf-8") as f:\n            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " | " + msg + "\\n")\n    except Exception:\n        pass\n\ntry:\n    log("HELPER_START | pid=%s" % old_pid)\n\n    SYNCHRONIZE = 0x00100000\n    kernel32 = ctypes.windll.kernel32\n    h = kernel32.OpenProcess(SYNCHRONIZE, False, old_pid)\n\n    if h:\n        rc = kernel32.WaitForSingleObject(h, 30000)\n        kernel32.CloseHandle(h)\n        log("WAIT_OLD_DONE | rc=%s" % rc)\n    else:\n        log("WAIT_OLD_OPENPROCESS_FAILED_ASSUME_EXITED")\n\n    time.sleep(0.5)\n\n    replaced = False\n    last_error = ""\n\n    for attempt in range(1, 21):\n        try:\n            if os.path.exists(current_file):\n                try:\n                    os.makedirs(os.path.dirname(backup), exist_ok=True)\n                    shutil.copy2(current_file, backup)\n                except Exception as e:\n                    log("BACKUP_WARN | attempt=%s | %r" % (attempt, e))\n\n            os.replace(new_file, current_file)\n            replaced = True\n            log("REPLACE_OK | attempt=%s" % attempt)\n            break\n\n        except Exception as e:\n            last_error = repr(e)\n            log("REPLACE_RETRY | attempt=%s | %s" % (attempt, last_error))\n            time.sleep(0.4)\n\n    if not replaced:\n        raise RuntimeError("Không thay được file sau 20 lần: " + last_error)\n\n    if not os.path.isfile(current_file):\n        raise RuntimeError("File chính không tồn tại sau replace")\n\n    time.sleep(0.3)\n\n    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)\n    p = subprocess.Popen(\n        [restart_exe, current_file],\n        cwd=os.path.dirname(current_file),\n        creationflags=flags,\n        close_fds=True\n    )\n\n    log("RESTART_OK | exe=%s | new_pid=%s" % (restart_exe, p.pid))\n\nexcept Exception:\n    log("HELPER_FATAL | " + traceback.format_exc().replace("\\n", " || "))\n\nfinally:\n    try:\n        os.remove(__file__)\n    except Exception:\n        pass\n'
+    helper_code = '# -*- coding: utf-8 -*-\nimport os\nimport sys\nimport time\nimport shutil\nimport ctypes\nimport subprocess\nimport traceback\n\ncurrent_file = sys.argv[1]\nnew_file = sys.argv[2]\nbackup = sys.argv[3]\nrestart_exe = sys.argv[4]\nold_pid = int(sys.argv[5])\nlog_file = sys.argv[6]\n\ndef log(msg):\n    try:\n        os.makedirs(os.path.dirname(log_file), exist_ok=True)\n        with open(log_file, "a", encoding="utf-8") as f:\n            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " | " + msg + "\\n")\n    except Exception:\n        pass\n\ntry:\n    log("HELPER_START | pid=%s" % old_pid)\n\n    SYNCHRONIZE = 0x00100000\n    kernel32 = ctypes.windll.kernel32\n    h = kernel32.OpenProcess(SYNCHRONIZE, False, old_pid)\n\n    if h:\n        rc = kernel32.WaitForSingleObject(h, 30000)\n        kernel32.CloseHandle(h)\n        log("WAIT_OLD_DONE | rc=%s" % rc)\n    else:\n        log("WAIT_OLD_OPENPROCESS_FAILED_ASSUME_EXITED")\n\n    time.sleep(1.0)\n\n    replaced = False\n    last_error = ""\n\n    for attempt in range(1, 21):\n        try:\n            if os.path.exists(current_file):\n                try:\n                    os.makedirs(os.path.dirname(backup), exist_ok=True)\n                    shutil.copy2(current_file, backup)\n                except Exception as e:\n                    log("BACKUP_WARN | attempt=%s | %r" % (attempt, e))\n\n            os.replace(new_file, current_file)\n            replaced = True\n            log("REPLACE_OK | attempt=%s" % attempt)\n            break\n\n        except Exception as e:\n            last_error = repr(e)\n            log("REPLACE_RETRY | attempt=%s | %s" % (attempt, last_error))\n            time.sleep(0.5)\n\n    if not replaced:\n        raise RuntimeError("Không thay được file sau 20 lần: " + last_error)\n\n    if not os.path.isfile(current_file):\n        raise RuntimeError("File chính không tồn tại sau replace")\n\n    time.sleep(0.5)\n\n    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)\n    p = subprocess.Popen(\n        [restart_exe, current_file, "update_restart"],\n        cwd=os.path.dirname(current_file),\n        creationflags=flags,\n        close_fds=True\n    )\n\n    log("RESTART_OK | exe=%s | new_pid=%s" % (restart_exe, p.pid))\n\nexcept Exception:\n    log("HELPER_FATAL | " + traceback.format_exc().replace("\\n", " || "))\n\nfinally:\n    try:\n        os.remove(__file__)\n    except Exception:\n        pass\n'
 
     with open(helper_file, "w", encoding="utf-8") as f:
         f.write(helper_code)
@@ -358,6 +359,8 @@ def _install_downloaded_update(new_file, version):
         restart_log,
         version
     )
+    
+    release_single_instance()
 
     subprocess.Popen(
         [
@@ -391,7 +394,6 @@ def _get_update_download_dir():
 
 
 def check_for_update(manual=False):
-    """Kiểm tra GitHub Raw. manual=True thì có thông báo kết quả cho người dùng."""
     if not _update_lock.acquire(False):
         if manual:
             _show_info("Cập nhật", "Đang có một lần kiểm tra cập nhật khác chạy.")
@@ -411,16 +413,10 @@ def check_for_update(manual=False):
         manifest = json.loads(raw.decode("utf-8-sig"))
         version, version_code, download_url, expected_sha = _validate_manifest(manifest)
 
-        # Giữ lại manifest mới nhất trong logs để dễ kiểm tra.
         os.makedirs(LOG_DIR, exist_ok=True)
         manifest_copy = os.path.join(LOG_DIR, "version.json")
         with open(manifest_copy, "wb") as f:
             f.write(raw)
-
-        logger.info(
-            "UPDATE_MANIFEST_SAVED | %s",
-            manifest_copy
-        )
 
         state = _load_update_state()
         state["last_check"] = datetime.datetime.now().isoformat(timespec="seconds")
@@ -444,7 +440,6 @@ def check_for_update(manual=False):
         logger.info("UPDATE_DOWNLOAD_START | version=%s | url=%s", version, download_url)
         new_bytes = _http_get_bytes(download_url)
 
-        # Bảo vệ cơ bản: file mới phải là Python checker, không phải HTML lỗi.
         if len(new_bytes) < 5000 or b"Viettel HIS Medication Checker" not in new_bytes[:12000]:
             raise RuntimeError("File tải về không giống checker hợp lệ")
 
@@ -461,7 +456,6 @@ def check_for_update(manual=False):
         with open(new_file, "wb") as f:
             f.write(new_bytes)
 
-        # Compile trước khi thay file để tránh đẩy xuống code syntax-error.
         try:
             compile(new_bytes.decode("utf-8-sig"), new_file, "exec")
         except Exception as e:
@@ -478,18 +472,12 @@ def check_for_update(manual=False):
             actual_sha
         )
 
-        # Giữ lại 1 bản checker đã tải trong logs.
         archive_file = os.path.join(
             LOG_DIR,
             f"Viettel_HIS_Medication_Checker_{version}.py"
         )
         with open(archive_file, "wb") as f:
             f.write(new_bytes)
-
-        logger.info(
-            "UPDATE_ARCHIVE_SAVED | %s",
-            archive_file
-        )
 
         if manual:
             _show_info(
@@ -526,10 +514,6 @@ def update_now_async():
 
 
 def daily_update_loop():
-    """
-    Mỗi ngày, sau 01:00 nếu ngày đó chưa check thì check một lần.
-    Nếu máy tắt lúc 01:00 và bật 07:00 thì 07:00 sẽ check ngay.
-    """
     while not shutdown_event.is_set():
         try:
             now = datetime.datetime.now()
@@ -538,10 +522,8 @@ def daily_update_loop():
             last_day = state.get("last_auto_check_day", "")
 
             if now.hour >= UPDATE_CHECK_HOUR and last_day != today:
-                # Đánh dấu trước để tránh lặp liên tục nếu mạng đang lỗi.
                 state["last_auto_check_day"] = today
                 _save_update_state(state)
-
                 check_for_update(manual=False)
 
             shutdown_event.wait(60.0)
@@ -794,9 +776,7 @@ def parse_usage_time_points(usage_text):
     text = norm_text(usage_text).lower()
     time_points = []
 
-    # FIX: Tránh nhầm "1g" (1 gam) thành 1 giờ bằng cách yêu cầu chữ "giờ" hoặc bắt buộc cấu trúc "h/:" 
-    # Hoặc nếu là "g" thì phải đứng riêng hoặc có số phút đi kèm (rất ít khi kê "1g" là thời điểm).
-    # Đổi (?:h|:|g|giờ) thành (?:h|:|giờ) để an toàn. Nếu HIS ghi "8g" thì có thể bổ sung r"\bg\b" cẩn thận hơn.
+    # FIX: Tránh nhầm "1g" (1 gam) thành 1 giờ
     for m in re.finditer(
         r"\b(\d{1,2})\s*(?:h|:|giờ)\s*(\d{1,2})?\b",
         text,
@@ -812,7 +792,6 @@ def parse_usage_time_points(usage_text):
         if point not in time_points:
             time_points.append(point)
 
-    # Các thời điểm bằng chữ.
     for word in ("sáng", "trưa", "chiều", "tối", "đêm"):
         if re.search(rf"\b{word}\b", text, flags=re.I) and word not in time_points:
             time_points.append(word)
@@ -823,7 +802,6 @@ def parse_usage_time_points(usage_text):
 def check_row(row):
     dvt_raw = row.get("unit", "")
 
-    # Chỉ đối chiếu thuốc.
     if not is_medication_by_unit(dvt_raw):
         return {
             "status": "OK",
@@ -831,9 +809,6 @@ def check_row(row):
             "errors": []
         }
 
-    # QUAN TRỌNG V81:
-    # - Liều dùng chỉ dùng để tính liều / số lượng / DVT.
-    # - Cách dùng chỉ dùng để đếm thời điểm sử dụng.
     dose_raw = norm_text(row.get("dose", ""))
     usage_raw = norm_text(row.get("usage", ""))
 
@@ -842,15 +817,8 @@ def check_row(row):
     qty = parse_number(row.get("qty", ""))
     errors = []
 
-    # -------------------------
     # 1. KIỂM TRA LIỀU DÙNG
-    # -------------------------
     if not dose_raw or dose["calc_total"] is None:
-        snippet = (
-            dose_raw[:25] + "..."
-            if len(dose_raw) > 25
-            else dose_raw
-        )
         errors.append("Sai cấu trúc liều")
     else:
         if (
@@ -885,11 +853,7 @@ def check_row(row):
                 f"→ Cần {fmt_num(need)}"
             )
 
-    # -------------------------
     # 2. KIỂM TRA CÁCH DÙNG
-    # -------------------------
-    # Chỉ quan tâm SỐ MỐC THỜI ĐIỂM trong Cách dùng.
-    # Tuyệt đối không lấy giờ từ Liều dùng.
     req_times = (
         int(dose["times_per_day"])
         if dose["times_per_day"] is not None
@@ -923,7 +887,6 @@ def check_row(row):
     }
 
 
-
 # ============================================================
 # ACTIVE SCREEN GATE - V82.2
 # ============================================================
@@ -936,7 +899,6 @@ ALLOWED_MEDICATION_SCREENS = (
     "XUAT TU TRUC",
 )
 
-# Các cửa sổ nghiệp vụ con phải chặn tuyệt đối, không dùng grace.
 HARD_BLOCK_SCREEN_KEYWORDS = (
     "XUẤT GÓI",
     "XUAT GOI",
@@ -947,8 +909,6 @@ HARD_BLOCK_SCREEN_KEYWORDS = (
     "XUAT TU TRUC",
 )
 
-# HIS có thể đổi focus/title thoáng qua khi bấm F2/Lưu hoặc mở control con.
-# Giữ "vé hợp lệ" ngắn để scan vẫn chạy sau trigger đúng màn hình.
 ACTIVE_SCREEN_GRACE_SECONDS = 3.0
 _last_allowed_screen_time = 0.0
 _last_allowed_screen_title = ""
@@ -980,11 +940,6 @@ def get_foreground_window_title():
         return "", 0
 
 def is_exact_allowed_medication_screen_active():
-    """
-    V82.6A2:
-    Chấp nhận cả title đầy đủ của HIS và title rút gọn như
-    "Tờ điều trị" / "Kê Đơn Ngoại Trú".
-    """
     title, hwnd = get_foreground_window_title()
     if not hwnd or not title:
         return False
@@ -998,10 +953,6 @@ def is_exact_allowed_medication_screen_active():
 
 
 def is_hard_block_screen_active():
-    """
-    Nếu foreground là cửa sổ nghiệp vụ con như Xuất gói thì chặn ngay.
-    Không dùng grace trong trường hợp này.
-    """
     title, hwnd = get_foreground_window_title()
     if not hwnd or not title:
         return False
@@ -1011,12 +962,6 @@ def is_hard_block_screen_active():
 
 
 def is_allowed_medication_screen_active(use_grace=True):
-    """
-    V82.6A2 TITLE FIX:
-    - Nhận "Tờ điều trị" kể cả khi title chỉ có đúng cụm này.
-    - Nhận "Kê Đơn Ngoại Trú" / "... BHYT".
-    - "Thông báo" và màn khác vẫn bị chặn.
-    """
     global _last_allowed_screen_time, _last_allowed_screen_title
 
     title, hwnd = get_foreground_window_title()
@@ -1025,7 +970,6 @@ def is_allowed_medication_screen_active(use_grace=True):
     if hwnd and title:
         upper = norm_text(title).upper()
 
-        # Hard-block luôn ưu tiên chặn.
         if any(k in upper for k in HARD_BLOCK_SCREEN_KEYWORDS):
             return False
 
@@ -1039,7 +983,6 @@ def is_allowed_medication_screen_active(use_grace=True):
             _last_allowed_screen_title = title
             return True
 
-    # Grace chỉ để chống việc HIS đổi focus/title thoáng qua.
     if use_grace and (now - _last_allowed_screen_time) <= ACTIVE_SCREEN_GRACE_SECONDS:
         return True
 
@@ -1070,19 +1013,6 @@ HIS_TITLE_KEYWORDS = (
 )
 
 def find_his_hwnd_win32():
-    """
-    V82.6A12 STABLE:
-    - Ưu tiên đúng cửa sổ foreground mà người dùng đang thao tác.
-    - Nếu foreground không phải màn kê thuốc HIS thì fallback đúng logic cũ.
-
-    Lý do: Viettel HIS có thể giữ nhiều top-level window cùng lúc.
-    Cách cũ EnumWindows lấy cửa sổ HIS đầu tiên nên đôi lúc chọn nhầm
-    cửa sổ cũ -> scan nhanh nhưng rows=0.
-    """
-
-    # --------------------------------------------------------
-    # FAST / CORRECT PATH: foreground hiện tại
-    # --------------------------------------------------------
     try:
         fg = user32.GetForegroundWindow()
 
@@ -1105,27 +1035,15 @@ def find_his_hwnd_win32():
                     buf.value
                 ).upper()
 
-                # Chỉ nhận foreground nếu chính nó là màn checker hỗ trợ.
                 if any(
                     screen in title
                     for screen in ALLOWED_MEDICATION_SCREENS
                 ):
-                    logger.info(
-                        "HIS_WINDOW_FOREGROUND | hwnd=%s | title=%s",
-                        int(root),
-                        buf.value
-                    )
                     return root
 
-    except Exception as e:
-        logger.warning(
-            "HIS_WINDOW_FOREGROUND_ERROR | %s",
-            e
-        )
+    except Exception:
+        pass
 
-    # --------------------------------------------------------
-    # FALLBACK: nguyên cơ chế cũ, để giữ độ tương thích.
-    # --------------------------------------------------------
     found = 0
 
     EnumProc = ctypes.WINFUNCTYPE(
@@ -1174,20 +1092,8 @@ def find_his_hwnd_win32():
             EnumProc(enum_cb),
             0
         )
-    except Exception as e:
-        logger.exception(
-            "find_his_hwnd_win32 | %s",
-            e
-        )
-
-    if found:
-        try:
-            logger.info(
-                "HIS_WINDOW_FALLBACK | hwnd=%s",
-                int(found)
-            )
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     return found
 
@@ -1213,24 +1119,6 @@ def is_uia_recoverable_error(exc):
     return any(k in text for k in keywords)
 
 # ============================================================
-# COLUMN POSITION HELPERS - V81
-# ============================================================
-
-def _uia_find_header_x(uia, root, names):
-    """Trả về X trái của header đầu tiên tìm thấy; -9999 nếu không có."""
-    for header_name in names:
-        try:
-            cond = uia.CreatePropertyCondition(30005, header_name)
-            el = root.FindFirst(4, cond)
-            if el:
-                rect = el.GetCurrentPropertyValue(30001)
-                if rect and len(rect) == 4:
-                    return rect[0]
-        except Exception:
-            pass
-    return -9999
-
-# ============================================================
 # EXACT NAMED CELL PARSER - V82
 # ============================================================
 
@@ -1238,7 +1126,6 @@ CELL_ROW_RE = re.compile(r"\bRow\s+(\d+)\b", flags=re.I)
 
 
 def _field_from_uia_cell_name(name):
-    """Map đúng cell DataGridView do HIS expose qua UI Automation."""
     low = norm_text(name).lower()
 
     if "row " not in low:
@@ -1250,7 +1137,6 @@ def _field_from_uia_cell_name(name):
 
     row_no = int(m.group(1))
 
-    # Thứ tự rất quan trọng: Cách dùng/Liều dùng phải tách riêng.
     if "tên thuốc, vật tư" in low or "tên thuốc vật tư" in low or "tên thuốc" in low:
         return row_no, "name"
     if re.search(r"(^|\s)đvt(\s|$)", low) or "đơn vị tính" in low:
@@ -1266,8 +1152,6 @@ def _field_from_uia_cell_name(name):
 
 
 def _uia_value_fast(el):
-    """Đọc ValuePattern trước, không lấy Name làm nội dung cell."""
-    # UIA ValueValuePropertyId
     try:
         v = el.GetCurrentPropertyValue(30045)
         if v is not None:
@@ -1277,7 +1161,6 @@ def _uia_value_fast(el):
     except Exception:
         pass
 
-    # LegacyIAccessible.Value
     try:
         v = el.GetCurrentPropertyValue(30093)
         if v is not None:
@@ -1294,10 +1177,6 @@ def _uia_value_fast(el):
 # ============================================================
 
 class UIAutomationCore:
-    """
-    Toàn bộ COM/UIAutomation chỉ chạy trên một worker thread.
-    Không chia sẻ CUIAutomation/element sang Tkinter hoặc monitor thread.
-    """
 
     def __init__(self):
         self.uia = None
@@ -1314,26 +1193,14 @@ class UIAutomationCore:
             )
 
             self.initialized = True
-            logger.info("UIA_INIT | CUIAutomation created")
             return True
 
         except Exception as e:
             self.uia = None
             self.initialized = False
-
-            logger.exception(
-                "UIA_INIT_ERROR | %s",
-                e
-            )
-
             return False
 
     def reset(self, reason="unknown"):
-        logger.warning(
-            "UIA_RESET | reason=%s",
-            reason
-        )
-
         old = self.uia
         self.uia = None
         self.initialized = False
@@ -1343,9 +1210,7 @@ class UIAutomationCore:
         except Exception:
             pass
 
-        # Cho COM wrapper có cơ hội release reference.
         time.sleep(0.01)
-
         return self.initialize()
 
     def close(self):
@@ -1359,25 +1224,12 @@ class UIAutomationCore:
             pass
 
     def extract_anti_ghost(self):
-        """
-        V82 NAMED-CELL FAST:
-        - Không suy cột bằng tọa độ X nữa.
-        - Đọc đúng các cell mà DataGridView expose như:
-            Tên thuốc, vật tư Row 1
-            DVT Row 1
-            SL Row 1
-            Cách dùng Row 1
-            Liều dùng Row 1
-        - ValuePattern của Cách dùng và Liều dùng được đọc riêng tuyệt đối.
-        - Không đọc Đơn giá/Thành tiền/Phiếu lĩnh => ít COM calls hơn.
-        """
         if not self.initialize():
             return []
 
         uia = self.uia
         hwnd = find_his_hwnd_win32()
         if not hwnd:
-            logger.warning("SCAN | HIS_WINDOW_NOT_FOUND")
             return []
 
         win_elem = None
@@ -1389,7 +1241,6 @@ class UIAutomationCore:
             win_elem = uia.ElementFromHandle(hwnd)
             target_grid = win_elem
 
-            # Tìm header thuốc để leo lên đúng DataGrid/Table.
             cond_h1 = uia.CreatePropertyCondition(30005, "Tên thuốc, vật tư")
             cond_h2 = uia.CreatePropertyCondition(30005, "Tên thuốc")
             cond_h3 = uia.CreatePropertyCondition(30005, "Tên thuốc vật tư")
@@ -1409,8 +1260,6 @@ class UIAutomationCore:
                         target_grid = curr
                         break
 
-            # Một FindAll duy nhất. Sau đó chỉ đọc CurrentName; chỉ 5 field cần thiết
-            # mới gọi ValuePattern. Không gọi BoundingRectangle cho từng element.
             elements = target_grid.FindAll(4, uia.CreateTrueCondition())
             rows = {}
 
@@ -1418,7 +1267,6 @@ class UIAutomationCore:
                 try:
                     el = elements.GetElement(i)
 
-                    # Name là metadata cần để biết cell nào; rẻ hơn đọc rectangle + value mọi element.
                     try:
                         cell_name = norm_text(el.CurrentName)
                     except Exception:
@@ -1434,7 +1282,6 @@ class UIAutomationCore:
                     value = _uia_value_fast(el)
                     rows.setdefault(row_no, {})
 
-                    # Một số HIS có nested element cùng tên. Giữ giá trị dài/đầy đủ hơn.
                     old = rows[row_no].get(field, "")
                     if value and (not old or len(value) > len(old)):
                         rows[row_no][field] = value
@@ -1453,32 +1300,11 @@ class UIAutomationCore:
                 if not name or name.lower() in {"null", "(null)", "none", "tên thuốc, vật tư"}:
                     continue
 
-                # Chỉ thuốc; vật tư bị bỏ ngay từ đây để giảm logic phía sau.
                 if not is_medication_by_unit(r.get("unit", "")):
                     continue
 
                 r["_row_no"] = row_no
                 all_rows.append(r)
-
-                # Log ngắn để khi có false positive nhìn được chính xác 2 cột đã đọc.
-                logger.info(
-                    "ROW_DATA | row=%s | name=%s | unit=%s | qty=%s | usage=%s | dose=%s",
-                    row_no,
-                    name,
-                    r.get("unit", ""),
-                    r.get("qty", ""),
-                    r.get("usage", ""),
-                    r.get("dose", "")
-                )
-
-            if not all_rows:
-                logger.warning(
-                    "SCAN_ZERO_ROWS | hwnd=%s | header_found=%s | elements=%s",
-                    hwnd,
-                    bool(header),
-                    getattr(elements, "Length", -1)
-                    if elements is not None else -1
-                )
 
             return all_rows
 
@@ -1513,15 +1339,11 @@ class SafeToastManager:
         self.after_id = None
 
     def update_toast(self, error_items):
-
         if self.after_id and self.window:
             try:
-                self.window.after_cancel(
-                    self.after_id
-                )
+                self.window.after_cancel(self.after_id)
             except Exception:
                 pass
-
             self.after_id = None
 
         if self.window:
@@ -1529,7 +1351,6 @@ class SafeToastManager:
                 self.window.destroy()
             except Exception:
                 pass
-
             self.window = None
 
         if not error_items:
@@ -1540,26 +1361,13 @@ class SafeToastManager:
         self.window.attributes("-topmost", True)
         self.window.overrideredirect(True)
 
-        outer = tk.Frame(
-            self.window,
-            bg="#d32f2f",
-            padx=2,
-            pady=2
-        )
+        outer = tk.Frame(self.window, bg="#d32f2f", padx=2, pady=2)
         outer.pack(fill="both", expand=True)
 
-        inner = tk.Frame(
-            outer,
-            bg="#fffde7",
-            padx=8,
-            pady=6
-        )
+        inner = tk.Frame(outer, bg="#fffde7", padx=8, pady=6)
         inner.pack(fill="both", expand=True)
 
-        hf = tk.Frame(
-            inner,
-            bg="#fffde7"
-        )
+        hf = tk.Frame(inner, bg="#fffde7")
         hf.pack(fill="x", pady=(0, 2))
 
         tk.Label(
@@ -1578,19 +1386,11 @@ class SafeToastManager:
             font=("Segoe UI", 9, "bold"),
             cursor="hand2"
         )
-
         btn.pack(side="right")
-        btn.bind(
-            "<Button-1>",
-            lambda e: self.hide_toast()
-        )
+        btn.bind("<Button-1>", lambda e: self.hide_toast())
 
         for item in error_items:
-            med_name = item["row"].get(
-                "name",
-                ""
-            )
-
+            med_name = item["row"].get("name", "")
             if len(med_name) > 20:
                 med_name = med_name[:18] + ".."
 
@@ -1614,13 +1414,10 @@ class SafeToastManager:
                 ).pack(anchor="w")
 
         self.window.update_idletasks()
-
         w = self.window.winfo_reqwidth()
         h = self.window.winfo_reqheight()
-
         sw = self.window.winfo_screenwidth()
         sh = self.window.winfo_screenheight()
-
         width = max(w, 240)
 
         self.window.geometry(
@@ -1629,21 +1426,14 @@ class SafeToastManager:
             f"{sh - h - 45}"
         )
 
-        self.after_id = self.window.after(
-            POPUP_DURATION * 1000,
-            self.hide_toast
-        )
+        self.after_id = self.window.after(POPUP_DURATION * 1000, self.hide_toast)
 
     def hide_toast(self):
-
         if self.after_id and self.window:
             try:
-                self.window.after_cancel(
-                    self.after_id
-                )
+                self.window.after_cancel(self.after_id)
             except Exception:
                 pass
-
             self.after_id = None
 
         if self.window:
@@ -1651,7 +1441,6 @@ class SafeToastManager:
                 self.window.destroy()
             except Exception:
                 pass
-
             self.window = None
 
 # ============================================================
@@ -1660,14 +1449,10 @@ class SafeToastManager:
 
 app_tk_root = None
 toast_mgr = None
-
 scan_queue = queue.Queue(maxsize=2)
-
 shutdown_event = threading.Event()
-
 worker_thread = None
 worker_ready = threading.Event()
-
 worker_state_lock = threading.Lock()
 
 worker_state = {
@@ -1679,10 +1464,6 @@ worker_state = {
     "heartbeat": time.monotonic(),
     "scan_count": 0
 }
-
-# ============================================================
-# WORKER STATE
-# ============================================================
 
 def set_worker_state(**kwargs):
     with worker_state_lock:
@@ -1698,54 +1479,21 @@ def get_worker_state():
 # ============================================================
 
 def run_scan_once(uia_core, source):
-    """
-    Một scan hoàn chỉnh.
-    Không gọi check_row hai lần.
-    V82.2: kiểm tra lại active screen ngay trước lúc đọc UIA.
-    """
-
-    # V82.3:
-    # Trigger đã được kiểm tra trước khi vào queue.
-    # KHÔNG kiểm tra foreground lần hai ở đây vì ngay sau F2/Lưu
-    # HIS thường đổi focus/title tạm thời, làm mất cảnh báo giả.
     t0 = time.perf_counter()
-
-    set_worker_state(
-        status="SCANNING",
-        last_start=time.monotonic(),
-        last_error=""
-    )
+    set_worker_state(status="SCANNING", last_start=time.monotonic(), last_error="")
 
     if app_tk_root:
         try:
-            app_tk_root.after(
-                0,
-                toast_mgr.hide_toast
-            )
+            app_tk_root.after(0, toast_mgr.hide_toast)
         except Exception:
             pass
 
     try:
         all_rows = uia_core.extract_anti_ghost()
+        results = [check_row(r) for r in all_rows]
+        error_items = [x for x in results if x["status"] == "ERROR"]
 
-        # QUAN TRỌNG:
-        # V79 gọi check_row() hai lần.
-        # V80 chỉ gọi đúng một lần / row.
-        results = [
-            check_row(r)
-            for r in all_rows
-        ]
-
-        error_items = [
-            x
-            for x in results
-            if x["status"] == "ERROR"
-        ]
-
-        duration_ms = (
-            time.perf_counter() - t0
-        ) * 1000.0
-
+        duration_ms = (time.perf_counter() - t0) * 1000.0
         set_worker_state(
             status="HEALTHY",
             last_finish=time.monotonic(),
@@ -1753,48 +1501,22 @@ def run_scan_once(uia_core, source):
             scan_count=get_worker_state()["scan_count"] + 1
         )
 
-        logger.info(
-            "SCAN_OK | source=%s | rows=%d | errors=%d | %.2f ms",
-            source,
-            len(all_rows),
-            len(error_items),
-            duration_ms
-        )
-
         if app_tk_root:
             try:
-                app_tk_root.after(
-                    0,
-                    lambda errs=error_items:
-                        toast_mgr.update_toast(errs)
-                )
-            except Exception as e:
-                logger.exception(
-                    "TOAST_UPDATE_ERROR | %s",
-                    e
-                )
+                app_tk_root.after(0, lambda errs=error_items: toast_mgr.update_toast(errs))
+            except Exception:
+                pass
 
         return True
 
     except Exception as e:
-        duration_ms = (
-            time.perf_counter() - t0
-        ) * 1000.0
-
+        duration_ms = (time.perf_counter() - t0) * 1000.0
         set_worker_state(
             status="RECOVERING",
             last_finish=time.monotonic(),
             last_duration_ms=duration_ms,
             last_error=f"{type(e).__name__}: {e}"
         )
-
-        logger.exception(
-            "SCAN_ERROR | source=%s | %.2f ms | %s",
-            source,
-            duration_ms,
-            e
-        )
-
         return False
 
 # ============================================================
@@ -1804,301 +1526,117 @@ def run_scan_once(uia_core, source):
 class UIAutomationWorker(threading.Thread):
 
     def __init__(self):
-        super().__init__(
-            name="HIS-UIA-Worker",
-            daemon=True
-        )
-
+        super().__init__(name="HIS-UIA-Worker", daemon=True)
         self.uia_core = None
         self.com_initialized = False
 
     def initialize_com(self):
         try:
-            # Ưu tiên MTA.
             if hasattr(comtypes, "CoInitializeEx"):
                 comtypes.CoInitializeEx(0)
             else:
                 comtypes.CoInitialize()
-
             self.com_initialized = True
-
-            logger.info(
-                "COM_INIT | UIAutomation worker initialized"
-            )
-
             return True
-
-        except Exception as e:
-            logger.exception(
-                "COM_INIT_ERROR | %s",
-                e
-            )
-
+        except Exception:
             self.com_initialized = False
             return False
 
     def uninitialize_com(self):
         if not self.com_initialized:
             return
-
         try:
             comtypes.CoUninitialize()
-        except Exception as e:
-            logger.exception(
-                "COM_UNINIT_ERROR | %s",
-                e
-            )
-
+        except Exception:
+            pass
         self.com_initialized = False
 
     def recover_uia(self, reason):
-        set_worker_state(
-            status="RECOVERING",
-            last_error=str(reason)
-        )
-
-        logger.warning(
-            "RECOVERY_START | %s",
-            reason
-        )
-
+        set_worker_state(status="RECOVERING", last_error=str(reason))
         try:
             if self.uia_core:
-                self.uia_core.reset(
-                    reason=str(reason)
-                )
+                self.uia_core.reset(reason=str(reason))
             else:
                 self.uia_core = UIAutomationCore()
                 self.uia_core.initialize()
-
-            logger.info(
-                "RECOVERY_DONE | %s",
-                reason
-            )
-
-        except Exception as e:
-            logger.exception(
-                "RECOVERY_ERROR | reason=%s | %s",
-                reason,
-                e
-            )
+        except Exception:
+            pass
 
     def run(self):
-
         if not self.initialize_com():
-            set_worker_state(
-                status="ERROR",
-                last_error="COM initialization failed"
-            )
+            set_worker_state(status="ERROR", last_error="COM initialization failed")
             worker_ready.set()
             return
 
         try:
             self.uia_core = UIAutomationCore()
-
             if not self.uia_core.initialize():
-                set_worker_state(
-                    status="ERROR",
-                    last_error="UIAutomation initialization failed"
-                )
+                set_worker_state(status="ERROR", last_error="UIAutomation initialization failed")
 
             worker_ready.set()
-
-            set_worker_state(
-                status="HEALTHY"
-            )
+            set_worker_state(status="HEALTHY")
 
             while not shutdown_event.is_set():
-
                 try:
-                    source = scan_queue.get(
-                        timeout=0.25
-                    )
+                    source = scan_queue.get(timeout=0.25)
                 except queue.Empty:
-                    set_worker_state(
-                        status=get_worker_state()["status"]
-                    )
                     continue
 
                 if source is None:
                     break
 
-                # Chống scan trùng do trigger dồn.
-                # Chỉ xử lý một scan tại một thời điểm.
-                ok = run_scan_once(
-                    self.uia_core,
-                    source
-                )
-
+                ok = run_scan_once(self.uia_core, source)
                 if not ok:
-                    # Recovery ngay trong cùng COM worker.
-                    self.recover_uia(
-                        f"scan failed: {source}"
-                    )
-
-                    # Retry đúng 1 lần.
-                    retry_ok = run_scan_once(
-                        self.uia_core,
-                        source + " [RETRY]"
-                    )
-
-                    if not retry_ok:
-                        logger.error(
-                            "SCAN_RETRY_FAILED | source=%s",
-                            source
-                        )
-
-                        set_worker_state(
-                            status="ERROR"
-                        )
+                    self.recover_uia(f"scan failed: {source}")
+                    run_scan_once(self.uia_core, source + " [RETRY]")
 
                 scan_queue.task_done()
 
         except Exception as e:
-            set_worker_state(
-                status="ERROR",
-                last_error=f"{type(e).__name__}: {e}"
-            )
-
-            logger.exception(
-                "UIA_WORKER_FATAL | %s",
-                e
-            )
-
+            set_worker_state(status="ERROR", last_error=f"{type(e).__name__}: {e}")
         finally:
-            try:
-                if self.uia_core:
-                    self.uia_core.close()
-            except Exception:
-                pass
-
+            if self.uia_core:
+                self.uia_core.close()
             self.uia_core = None
-
             self.uninitialize_com()
-
-            set_worker_state(
-                status="STOPPED"
-            )
-
-            logger.info(
-                "UIA_WORKER_STOPPED"
-            )
-
-# ============================================================
-# START WORKER
-# ============================================================
+            set_worker_state(status="STOPPED")
 
 def start_uia_worker():
     global worker_thread
-
     worker_ready.clear()
-
     worker_thread = UIAutomationWorker()
     worker_thread.start()
-
-    # Không block lâu lúc khởi động.
     worker_ready.wait(timeout=3.0)
-
-    if worker_thread.is_alive():
-        logger.info(
-            "UIA_WORKER_STARTED"
-        )
-    else:
-        logger.error(
-            "UIA_WORKER_START_FAILED"
-        )
 
 # ============================================================
 # TRIGGER
 # ============================================================
 
 def trigger_scan(source, _transient_retry=0):
-
     if shutdown_event.is_set():
         return
 
-    # V82.6A3:
-    # Khi bấm XÁC NHẬN ở popup "Thông báo", foreground của HIS có thể
-    # tạm thời có title="" hoặc "Thông báo" trong vài trăm ms.
-    #
-    # Không scan ngay trong trạng thái này vì có thể đọc sai cây UIA.
-    # Chờ popup đóng rồi kiểm tra lại foreground thật.
     current_title, _ = get_foreground_window_title()
     current_upper = norm_text(current_title).upper()
 
-    is_transient_popup_state = (
-        not current_upper
-        or current_upper == "THÔNG BÁO"
-        or current_upper == "THONG BAO"
-    )
-
-    if is_transient_popup_state:
+    is_transient = (not current_upper or current_upper in ("THÔNG BÁO", "THONG BAO"))
+    if is_transient:
         if _transient_retry < 3:
-            delay = 0.25
-
-            logger.info(
-                "TRIGGER_WAIT_TRANSIENT | source=%s | retry=%d | title=%s",
-                source,
-                _transient_retry + 1,
-                current_title
-            )
-
-            timer = threading.Timer(
-                delay,
-                lambda: trigger_scan(
-                    source,
-                    _transient_retry + 1
-                )
-            )
+            timer = threading.Timer(0.25, lambda: trigger_scan(source, _transient_retry + 1))
             timer.daemon = True
             timer.start()
             return
-
-        logger.info(
-            "TRIGGER_SKIPPED_TRANSIENT_TIMEOUT | source=%s | title=%s",
-            source,
-            current_title
-        )
         hide_toast_if_needed()
         return
 
-    # Cửa sổ nghiệp vụ con như Xuất gói chặn tuyệt đối.
-    if is_hard_block_screen_active():
-        current_title, _ = get_foreground_window_title()
-        logger.info(
-            "TRIGGER_SKIPPED_HARD_BLOCK | source=%s | title=%s",
-            source,
-            current_title
-        )
+    if is_hard_block_screen_active() or not is_allowed_medication_screen_active(use_grace=True):
         hide_toast_if_needed()
         return
 
-    # Giữ nguyên gate của V82.6A2 sau khi popup đã đóng.
-    if not is_allowed_medication_screen_active(use_grace=True):
-        current_title, _ = get_foreground_window_title()
-        logger.info(
-            "TRIGGER_SKIPPED_WRONG_SCREEN | source=%s | title=%s",
-            source,
-            current_title
-        )
-        hide_toast_if_needed()
-        return
-
-    # Không cho queue phình.
     try:
         scan_queue.put_nowait(source)
-
-        logger.info(
-            "TRIGGER | %s",
-            source
-        )
-
     except queue.Full:
-        logger.info(
-            "TRIGGER_IGNORED_QUEUE_FULL | %s",
-            source
-        )
-
+        pass
 
 # ============================================================
 # WATCHDOG
@@ -2108,343 +1646,149 @@ WATCHDOG_INTERVAL = 2.0
 WATCHDOG_STALL_SECONDS = 8.0
 
 def watchdog_loop():
-
     while not shutdown_event.is_set():
-
         try:
             time.sleep(WATCHDOG_INTERVAL)
-
             if shutdown_event.is_set():
                 break
 
             wt = worker_thread
-
             if wt is None or not wt.is_alive():
-                logger.error(
-                    "WATCHDOG | worker thread is not alive"
-                )
-
-                # Chỉ khởi động worker mới khi worker cũ
-                # thực sự đã chết.
                 if not shutdown_event.is_set():
                     start_uia_worker()
-
                 continue
 
             state = get_worker_state()
-
             if state["status"] == "SCANNING":
-                elapsed = (
-                    time.monotonic()
-                    - state["last_start"]
-                )
-
+                elapsed = time.monotonic() - state["last_start"]
                 if elapsed > WATCHDOG_STALL_SECONDS:
-                    logger.error(
-                        "WATCHDOG | possible stalled scan | %.2f sec",
-                        elapsed
-                    )
-
-                    # Không tạo worker thứ hai ở đây.
-                    # Python không thể an toàn kill thread đang nằm
-                    # trong COM call. Chỉ ghi nhận để tránh tạo
-                    # nhiều COM worker song song.
-                    #
-                    # Worker sẽ tự xử lý exception/recovery khi COM
-                    # call trả về.
                     set_worker_state(
                         status="RECOVERING",
-                        last_error=(
-                            f"scan exceeded "
-                            f"{WATCHDOG_STALL_SECONDS}s"
-                        )
+                        last_error=f"scan exceeded {WATCHDOG_STALL_SECONDS}s"
                     )
-
-        except Exception as e:
-            logger.exception(
-                "WATCHDOG_ERROR | %s",
-                e
-            )
+        except Exception:
+            pass
 
 # ============================================================
 # TRAY
 # ============================================================
 
 def create_tray_icon():
-
     if not HAS_TRAY:
         return
 
     try:
-        image = Image.new(
-            "RGBA",
-            (64, 64),
-            color=(255, 255, 255, 0)
-        )
-
+        image = Image.new("RGBA", (64, 64), color=(255, 255, 255, 0))
         draw = ImageDraw.Draw(image)
-
-        draw.ellipse(
-            (0, 0, 64, 64),
-            fill=(41, 128, 185)
-        )
-
-        draw.rectangle(
-            (26, 12, 38, 52),
-            fill="white"
-        )
-
-        draw.rectangle(
-            (12, 26, 52, 38),
-            fill="white"
-        )
+        draw.ellipse((0, 0, 64, 64), fill=(41, 128, 185))
+        draw.rectangle((26, 12, 38, 52), fill="white")
+        draw.rectangle((12, 26, 52, 38), fill="white")
 
         def on_quit(icon, item):
             shutdown()
-
             try:
                 icon.stop()
             except Exception:
                 pass
 
         def on_update(icon, item):
-            logger.info("UPDATE_MANUAL_REQUEST")
             update_now_async()
 
         def on_version(icon, item):
-            _show_info(
-                "Viettel HIS Checker",
-                f"Phiên bản hiện tại: {APP_VERSION}"
-            )
+            _show_info("Viettel HIS Checker", f"Phiên bản hiện tại: {APP_VERSION}")
 
         def on_open_log(icon, item):
             try:
                 os.startfile(LOG_FILE)
-            except Exception as e:
-                logger.exception("OPEN_LOG_ERROR | %s", e)
+            except Exception:
+                pass
 
         menu = pystray.Menu(
-            pystray.MenuItem(
-                "Kiểm tra cập nhật ngay",
-                on_update
-            ),
-            pystray.MenuItem(
-                f"Phiên bản: {APP_VERSION}",
-                on_version
-            ),
-            pystray.MenuItem(
-                "Mở log",
-                on_open_log
-            ),
+            pystray.MenuItem("Kiểm tra cập nhật ngay", on_update),
+            pystray.MenuItem(f"Phiên bản: {APP_VERSION}", on_version),
+            pystray.MenuItem("Mở log", on_open_log),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(
-                "Thoát phần mềm (Exit)",
-                on_quit
-            )
+            pystray.MenuItem("Thoát phần mềm (Exit)", on_quit)
         )
 
-        icon = pystray.Icon(
-            "HIS_Checker",
-            image,
-            "Viettel HIS Checker",
-            menu
-        )
-
+        icon = pystray.Icon("HIS_Checker", image, "Viettel HIS Checker", menu)
         icon.run()
 
-    except Exception as e:
-        logger.exception(
-            "TRAY_ERROR | %s",
-            e
-        )
+    except Exception:
+        pass
 
 # ============================================================
-# MOUSE CLICK DETECTION
+# MOUSE / KEYBOARD MONITOR
 # ============================================================
 
-CLICK_KEYWORDS = (
-    "chấp nhận",
-    "chap nhan",
-    "đồng ý",
-    "dong y",
-    "lưu",
-    "luu",
-    "f2",
-    "ok"
-)
-
-CLICK_IGNORE = (
-    "cách dùng",
-    "liều dùng",
-    "xoá",
-    "xóa",
-    "xuất gói",
-    "xuat goi",
-    "xuất từ trực",
-    "xuat tu truc"
-)
+CLICK_KEYWORDS = ("chấp nhận", "chap nhan", "đồng ý", "dong y", "lưu", "luu", "f2", "ok")
+CLICK_IGNORE = ("cách dùng", "liều dùng", "xoá", "xóa", "xuất gói", "xuat goi", "xuất từ trực", "xuat tu truc")
 
 def check_click_and_trigger():
-
     try:
-        # V82.4: nếu đang ở cửa sổ Xuất gói/... thì bỏ ngay,
-        # không tạo trigger và không làm popup nháy.
         if is_hard_block_screen_active():
-            logger.info("CLICK_SKIPPED_HARD_BLOCK_SCREEN")
             hide_toast_if_needed()
             return
-        pt = POINT()
 
-        if not user32.GetCursorPos(
-            ctypes.byref(pt)
-        ):
+        pt = POINT()
+        if not user32.GetCursorPos(ctypes.byref(pt)):
             return
 
         hwnd = user32.WindowFromPoint(pt)
-
         if not hwnd:
             return
 
         length = user32.GetWindowTextLengthW(hwnd)
-
         if length <= 0:
             return
 
-        buf = ctypes.create_unicode_buffer(
-            length + 1
-        )
-
-        user32.GetWindowTextW(
-            hwnd,
-            buf,
-            length + 1
-        )
-
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
         name = buf.value.lower()
 
-        if (
-            any(k in name for k in CLICK_KEYWORDS)
-            and not any(
-                ign in name
-                for ign in CLICK_IGNORE
-            )
-        ):
-            # Chờ HIS cập nhật grid một khoảng rất ngắn.
+        if any(k in name for k in CLICK_KEYWORDS) and not any(ign in name for ign in CLICK_IGNORE):
             time.sleep(0.06)
+            trigger_scan("CLICK XÁC NHẬN")
 
-            trigger_scan(
-                "CLICK XÁC NHẬN"
-            )
-
-    except Exception as e:
-        logger.exception(
-            "CLICK_CHECK_ERROR | %s",
-            e
-        )
-
-# ============================================================
-# KEYBOARD / MOUSE MONITOR
-# ============================================================
+    except Exception:
+        pass
 
 def monitor_actions():
-
     f2_down = False
     f4_down = False
     lb_down = False
-
     last_trig = 0.0
 
     while not shutdown_event.is_set():
-
         try:
             now = time.monotonic()
-
-            # ----------------------------
-            # F2
-            # ----------------------------
-
-            is_f2 = bool(
-                user32.GetAsyncKeyState(VK_F2)
-                & 0x8000
-            )
-
-            if (
-                is_f2
-                and not f2_down
-                and now - last_trig > 0.5
-            ):
+            is_f2 = bool(user32.GetAsyncKeyState(VK_F2) & 0x8000)
+            if is_f2 and not f2_down and now - last_trig > 0.5:
                 trigger_scan("F2 (LƯU)")
                 last_trig = now
-
             f2_down = is_f2
 
-            # ----------------------------
-            # F4
-            # ----------------------------
-
-            is_f4 = bool(
-                user32.GetAsyncKeyState(VK_F4)
-                & 0x8000
-            )
-
-            if (
-                is_f4
-                and not f4_down
-                and now - last_trig > 0.5
-            ):
+            is_f4 = bool(user32.GetAsyncKeyState(VK_F4) & 0x8000)
+            if is_f4 and not f4_down and now - last_trig > 0.5:
                 trigger_scan("F4 (SỬA)")
                 last_trig = now
-
             f4_down = is_f4
 
-            # ----------------------------
-            # LEFT CLICK
-            # ----------------------------
-
-            is_lb = bool(
-                user32.GetAsyncKeyState(VK_LBUTTON)
-                & 0x8000
-            )
-
-            if (
-                is_lb
-                and not lb_down
-                and now - last_trig > 0.5
-            ):
-                threading.Thread(
-                    target=check_click_and_trigger,
-                    name="HIS-ClickCheck",
-                    daemon=True
-                ).start()
-
+            is_lb = bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+            if is_lb and not lb_down and now - last_trig > 0.5:
+                threading.Thread(target=check_click_and_trigger, daemon=True).start()
                 last_trig = now
-
             lb_down = is_lb
 
             time.sleep(0.015)
-
-        except Exception as e:
-            logger.exception(
-                "MONITOR_ERROR | %s",
-                e
-            )
-
+        except Exception:
             time.sleep(0.1)
-
 
 # ============================================================
 # ACTIVE SCREEN WATCHER - V82.2
 # ============================================================
 
 def active_screen_watcher():
-    """
-    V82.5:
-    - Giữ cơ chế ẩn popup khi rời màn hình kê thuốc.
-    - Ghi nhớ khi đã đi vào cửa sổ Xuất gói / nghiệp vụ hard-block.
-    - Khi cửa sổ đó đóng và HIS quay lại Tờ điều trị / Kê đơn ngoại trú BHYT,
-      tự scan 1 lần để bắt lỗi ngay, không cần click thêm.
-    - Chỉ dùng Win32 để theo dõi; UIAutomation chỉ chạy khi thực sự trigger scan.
-    """
     last_effective = None
     wrong_since = None
     was_in_hard_block = False
@@ -2457,73 +1801,44 @@ def active_screen_watcher():
             exact_allowed = is_exact_allowed_medication_screen_active()
             allowed = is_allowed_medication_screen_active(use_grace=True)
 
-            # Đã vào Xuất gói / cửa sổ nghiệp vụ con.
             if hard_block:
-                if not was_in_hard_block:
-                    logger.info("HARD_BLOCK_ENTERED")
                 was_in_hard_block = True
                 return_rescan_done = False
-
-                # Ẩn ngay popup cũ nếu còn.
                 hide_toast_if_needed()
 
-            # Đã rời hard-block và quay lại đúng màn hình kê thuốc.
             elif was_in_hard_block and exact_allowed and not return_rescan_done:
-                logger.info("RETURN_TO_MEDICATION_SCREEN | auto_rescan=scheduled")
-
-                # Cho HIS ~250 ms dựng lại DataGrid sau khi modal đóng.
                 time.sleep(0.25)
-
-                # Kiểm tra lại một lần nữa để tránh scan nếu vừa chuyển tab tiếp.
                 if is_exact_allowed_medication_screen_active():
                     trigger_scan("AUTO RETURN SAU XUẤT GÓI")
-                    logger.info("RETURN_TO_MEDICATION_SCREEN | auto_rescan=triggered")
                     return_rescan_done = True
                     was_in_hard_block = False
 
             if allowed:
                 wrong_since = None
                 if last_effective is not True:
-                    logger.info("ACTIVE_SCREEN_CHANGED | allowed=True")
                     last_effective = True
             else:
                 if wrong_since is None:
                     wrong_since = now
-
-                # Chỉ coi là rời thật sau 1 giây liên tục.
                 if now - wrong_since >= 1.0:
                     if last_effective is not False:
-                        title, _ = get_foreground_window_title()
-                        logger.info(
-                            "ACTIVE_SCREEN_CHANGED | allowed=False | title=%s",
-                            title
-                        )
                         hide_toast_if_needed()
                         last_effective = False
 
             time.sleep(0.20)
-
-        except Exception as e:
-            logger.exception(
-                "ACTIVE_SCREEN_WATCHER_ERROR | %s",
-                e
-            )
+        except Exception:
             time.sleep(0.5)
-
 
 # ============================================================
 # SHUTDOWN
 # ============================================================
 
 def shutdown():
-
+    release_single_instance()
     if shutdown_event.is_set():
         return
 
-    logger.info(
-        "SHUTDOWN_REQUEST"
-    )
-
+    logger.info("SHUTDOWN_REQUEST")
     shutdown_event.set()
 
     try:
@@ -2536,115 +1851,37 @@ def shutdown():
 # ============================================================
 
 def main():
-    # ---- Thêm code kiểm tra mở nhiều lần ở ngay đầu main ----
     enforce_single_instance()
 
     global app_tk_root
     global toast_mgr
 
-    logger.info(
-        "=================================================="
-    )
-    logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A14 NO ADMIN TEST START"
-    )
-    logger.info(
-        "Python=%s",
-        sys.version.replace("\n", " ")
-    )
-    logger.info(
-        "PID=%s",
-        os.getpid()
-    )
-    logger.info(
-        "=================================================="
-    )
+    logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A15 NO ADMIN TEST START")
 
     app_tk_root = tk.Tk()
     app_tk_root.withdraw()
-
-    toast_mgr = SafeToastManager(
-        app_tk_root
-    )
-
-    # ----------------------------
-    # UIA worker
-    # ----------------------------
+    toast_mgr = SafeToastManager(app_tk_root)
 
     start_uia_worker()
 
-    # ----------------------------
-    # Tray
-    # ----------------------------
-
     if HAS_TRAY:
-        threading.Thread(
-            target=create_tray_icon,
-            name="HIS-Tray",
-            daemon=True
-        ).start()
-    else:
-        logger.warning(
-            "TRAY_DISABLED | pystray/Pillow not installed"
-        )
+        threading.Thread(target=create_tray_icon, name="HIS-Tray", daemon=True).start()
 
-    # ----------------------------
-    # Auto update: mỗi ngày sau 01:00
-    # ----------------------------
-
-    threading.Thread(
-        target=daily_update_loop,
-        name="HIS-AutoUpdate",
-        daemon=True
-    ).start()
-
-    # ----------------------------
-    # Keyboard/mouse monitor
-    # ----------------------------
-
-    threading.Thread(
-        target=monitor_actions,
-        name="HIS-Monitor",
-        daemon=True
-    ).start()
-
-    # ----------------------------
-    # Active screen watcher - V82.2
-    # ----------------------------
-    threading.Thread(
-        target=active_screen_watcher,
-        name="HIS-ActiveScreen",
-        daemon=True
-    ).start()
-
-    # ----------------------------
-    # Watchdog
-    # ----------------------------
-
-    threading.Thread(
-        target=watchdog_loop,
-        name="HIS-Watchdog",
-        daemon=True
-    ).start()
+    threading.Thread(target=daily_update_loop, name="HIS-AutoUpdate", daemon=True).start()
+    threading.Thread(target=monitor_actions, name="HIS-Monitor", daemon=True).start()
+    threading.Thread(target=active_screen_watcher, name="HIS-ActiveScreen", daemon=True).start()
+    threading.Thread(target=watchdog_loop, name="HIS-Watchdog", daemon=True).start()
 
     try:
         app_tk_root.mainloop()
-
     except KeyboardInterrupt:
         pass
-
     finally:
         shutdown()
-
-        # Cho worker tối đa 2 giây kết thúc sạch.
         wt = worker_thread
-
         if wt and wt.is_alive():
             wt.join(timeout=2.0)
-
-        logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A14 NO ADMIN TEST EXIT"
-        )
+        logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A15 NO ADMIN TEST EXIT")
 
 if __name__ == "__main__":
     main()
