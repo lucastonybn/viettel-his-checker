@@ -2,7 +2,7 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A16 NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A17 NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
 - Tự động giữ nguyên Shortcut ngoài Desktop khi Auto-Update.
@@ -56,8 +56,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A16"
-APP_VERSION_CODE = 82616
+APP_VERSION = "82.6A17"
+APP_VERSION_CODE = 82617
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -1897,7 +1897,7 @@ def main():
     global app_tk_root
     global toast_mgr
 
-    logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A16 NO ADMIN TEST START")
+    logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A17 NO ADMIN TEST START")
 
     app_tk_root = tk.Tk()
     app_tk_root.withdraw()
@@ -1922,7 +1922,7 @@ def main():
         wt = worker_thread
         if wt and wt.is_alive():
             wt.join(timeout=2.0)
-        logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A16 NO ADMIN TEST EXIT")
+        logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A17 NO ADMIN TEST EXIT")
 
 if __name__ == "__main__":
     main()
