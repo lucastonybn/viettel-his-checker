@@ -2,9 +2,10 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A15 (HOTFIX) NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A16 NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
+- Tự động giữ nguyên Shortcut ngoài Desktop khi Auto-Update.
 - Fix lỗi update bị chặn bởi Single Instance (Mutex).
 - Giữ nguyên tính năng tự động update lúc 1h sáng.
 - Sửa lỗi bắt nhầm "1g" (1 gam) thành 1 giờ (01:00) trong Cách dùng.
@@ -55,8 +56,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A15"
-APP_VERSION_CODE = 82615
+APP_VERSION = "82.6A16"
+APP_VERSION_CODE = 82616
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -115,7 +116,7 @@ _app_mutex = None
 
 def enforce_single_instance():
     global _app_mutex
-    # Bỏ qua check mutex nếu đang restart từ updater
+    # Bỏ qua check mutex nếu đang restart từ auto-updater
     if len(sys.argv) > 1 and "update_restart" in sys.argv:
         logger.info("APP_START | Bypassing Mutex check during auto-update restart.")
         return
@@ -147,6 +148,44 @@ def release_single_instance():
             logger.info("MUTEX_RELEASED")
         except Exception as e:
             logger.error("MUTEX_RELEASE_ERROR | %s", e)
+
+
+# ============================================================
+# DESKTOP SHORTCUT HELPER (GIỮ VÀ TỰ PHỤC HỒI SHORTCUT)
+# ============================================================
+
+def ensure_desktop_shortcut():
+    """Đảm bảo Shortcut ngoài Desktop luôn trỏ vào đúng file đang chạy."""
+    try:
+        desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+        shortcut_path = os.path.join(desktop, "Viettel HIS Checker.lnk")
+        current_script = os.path.abspath(sys.argv[0])
+
+        if not os.path.exists(shortcut_path):
+            pyexe = sys.executable
+            pyw = os.path.join(os.path.dirname(pyexe), "pythonw.exe")
+            target_exe = pyw if os.path.exists(pyw) else pyexe
+
+            vbs = (
+                f'Set ws = CreateObject("WScript.Shell")\n'
+                f'Set sc = ws.CreateShortcut("{shortcut_path}")\n'
+                f'sc.TargetPath = "{target_exe}"\n'
+                f'sc.Arguments = "\"{current_script}\""\n'
+                f'sc.WorkingDirectory = "{os.path.dirname(current_script)}"\n'
+                f'sc.Description = "Viettel HIS Medication Checker"\n'
+                f'sc.Save\n'
+            )
+            vbs_file = os.path.join(os.environ.get("TEMP", ""), "create_his_sc.vbs")
+            with open(vbs_file, "w", encoding="utf-8") as f:
+                f.write(vbs)
+            os.system(f'cscript //nologo "{vbs_file}"')
+            try:
+                os.remove(vbs_file)
+            except Exception:
+                pass
+            logger.info("DESKTOP_SHORTCUT_RESTORED")
+    except Exception as e:
+        logger.warning("ENSURE_SHORTCUT_FAILED | %s", e)
 
 
 # ============================================================
@@ -332,7 +371,8 @@ def _write_self_replace_helper(new_file, current_file):
     temp_dir = os.environ.get("TEMP") or app_dir
     helper_file = os.path.join(temp_dir, f"viettel_his_update_{pid}.py")
 
-    helper_code = '# -*- coding: utf-8 -*-\nimport os\nimport sys\nimport time\nimport shutil\nimport ctypes\nimport subprocess\nimport traceback\n\ncurrent_file = sys.argv[1]\nnew_file = sys.argv[2]\nbackup = sys.argv[3]\nrestart_exe = sys.argv[4]\nold_pid = int(sys.argv[5])\nlog_file = sys.argv[6]\n\ndef log(msg):\n    try:\n        os.makedirs(os.path.dirname(log_file), exist_ok=True)\n        with open(log_file, "a", encoding="utf-8") as f:\n            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " | " + msg + "\\n")\n    except Exception:\n        pass\n\ntry:\n    log("HELPER_START | pid=%s" % old_pid)\n\n    SYNCHRONIZE = 0x00100000\n    kernel32 = ctypes.windll.kernel32\n    h = kernel32.OpenProcess(SYNCHRONIZE, False, old_pid)\n\n    if h:\n        rc = kernel32.WaitForSingleObject(h, 30000)\n        kernel32.CloseHandle(h)\n        log("WAIT_OLD_DONE | rc=%s" % rc)\n    else:\n        log("WAIT_OLD_OPENPROCESS_FAILED_ASSUME_EXITED")\n\n    time.sleep(1.0)\n\n    replaced = False\n    last_error = ""\n\n    for attempt in range(1, 21):\n        try:\n            if os.path.exists(current_file):\n                try:\n                    os.makedirs(os.path.dirname(backup), exist_ok=True)\n                    shutil.copy2(current_file, backup)\n                except Exception as e:\n                    log("BACKUP_WARN | attempt=%s | %r" % (attempt, e))\n\n            os.replace(new_file, current_file)\n            replaced = True\n            log("REPLACE_OK | attempt=%s" % attempt)\n            break\n\n        except Exception as e:\n            last_error = repr(e)\n            log("REPLACE_RETRY | attempt=%s | %s" % (attempt, last_error))\n            time.sleep(0.5)\n\n    if not replaced:\n        raise RuntimeError("Không thay được file sau 20 lần: " + last_error)\n\n    if not os.path.isfile(current_file):\n        raise RuntimeError("File chính không tồn tại sau replace")\n\n    time.sleep(0.5)\n\n    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)\n    p = subprocess.Popen(\n        [restart_exe, current_file, "update_restart"],\n        cwd=os.path.dirname(current_file),\n        creationflags=flags,\n        close_fds=True\n    )\n\n    log("RESTART_OK | exe=%s | new_pid=%s" % (restart_exe, p.pid))\n\nexcept Exception:\n    log("HELPER_FATAL | " + traceback.format_exc().replace("\\n", " || "))\n\nfinally:\n    try:\n        os.remove(__file__)\n    except Exception:\n        pass\n'
+    # Dùng shutil.copy2 ghi đè nội dung file gốc để GIỮ NGUYÊN FILE ID -> KHÔNG BỊ HỎNG SHORTCUT
+    helper_code = '# -*- coding: utf-8 -*-\nimport os\nimport sys\nimport time\nimport shutil\nimport ctypes\nimport subprocess\nimport traceback\n\ncurrent_file = sys.argv[1]\nnew_file = sys.argv[2]\nbackup = sys.argv[3]\nrestart_exe = sys.argv[4]\nold_pid = int(sys.argv[5])\nlog_file = sys.argv[6]\n\ndef log(msg):\n    try:\n        os.makedirs(os.path.dirname(log_file), exist_ok=True)\n        with open(log_file, "a", encoding="utf-8") as f:\n            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " | " + msg + "\\n")\n    except Exception:\n        pass\n\ntry:\n    log("HELPER_START | pid=%s" % old_pid)\n\n    SYNCHRONIZE = 0x00100000\n    kernel32 = ctypes.windll.kernel32\n    h = kernel32.OpenProcess(SYNCHRONIZE, False, old_pid)\n\n    if h:\n        rc = kernel32.WaitForSingleObject(h, 30000)\n        kernel32.CloseHandle(h)\n        log("WAIT_OLD_DONE | rc=%s" % rc)\n    else:\n        log("WAIT_OLD_OPENPROCESS_FAILED_ASSUME_EXITED")\n\n    time.sleep(1.0)\n\n    replaced = False\n    last_error = ""\n\n    for attempt in range(1, 21):\n        try:\n            if os.path.exists(current_file):\n                try:\n                    os.makedirs(os.path.dirname(backup), exist_ok=True)\n                    shutil.copy2(current_file, backup)\n                except Exception as e:\n                    log("BACKUP_WARN | attempt=%s | %r" % (attempt, e))\n\n            # Ghi đè trực tiếp để giữ nguyên File ID và Shortcut liên kết\n            shutil.copy2(new_file, current_file)\n            try:\n                os.remove(new_file)\n            except Exception:\n                pass\n            replaced = True\n            log("REPLACE_OK | attempt=%s" % attempt)\n            break\n\n        except Exception as e:\n            last_error = repr(e)\n            log("REPLACE_RETRY | attempt=%s | %s" % (attempt, last_error))\n            time.sleep(0.5)\n\n    if not replaced:\n        raise RuntimeError("Không thay được file sau 20 lần: " + last_error)\n\n    if not os.path.isfile(current_file):\n        raise RuntimeError("File chính không tồn tại sau replace")\n\n    time.sleep(0.5)\n\n    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)\n    # Thêm tham số update_restart để bản mới bỏ qua check Mutex\n    p = subprocess.Popen(\n        [restart_exe, current_file, "update_restart"],\n        cwd=os.path.dirname(current_file),\n        creationflags=flags,\n        close_fds=True\n    )\n\n    log("RESTART_OK | exe=%s | new_pid=%s" % (restart_exe, p.pid))\n\nexcept Exception:\n    log("HELPER_FATAL | " + traceback.format_exc().replace("\\n", " || "))\n\nfinally:\n    try:\n        os.remove(__file__)\n    except Exception:\n        pass\n'
 
     with open(helper_file, "w", encoding="utf-8") as f:
         f.write(helper_code)
@@ -1195,7 +1235,7 @@ class UIAutomationCore:
             self.initialized = True
             return True
 
-        except Exception as e:
+        except Exception:
             self.uia = None
             self.initialized = False
             return False
@@ -1852,11 +1892,12 @@ def shutdown():
 
 def main():
     enforce_single_instance()
+    ensure_desktop_shortcut()
 
     global app_tk_root
     global toast_mgr
 
-    logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A15 NO ADMIN TEST START")
+    logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A16 NO ADMIN TEST START")
 
     app_tk_root = tk.Tk()
     app_tk_root.withdraw()
@@ -1881,7 +1922,7 @@ def main():
         wt = worker_thread
         if wt and wt.is_alive():
             wt.join(timeout=2.0)
-        logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A15 NO ADMIN TEST EXIT")
+        logger.info("VIETTEL HIS MEDICATION CHECKER V82.6A16 NO ADMIN TEST EXIT")
 
 if __name__ == "__main__":
     main()
