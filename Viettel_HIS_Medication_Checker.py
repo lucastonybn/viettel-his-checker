@@ -2,17 +2,12 @@
 # A6 TEST LOG FOLDER - updater download goes to ./logs
 # AUTOUPDATE TEST A5 - harmless version bump for updater validation
 """
-Viettel HIS Medication Checker - V82.6A12 STABLE ACTIVE WINDOW AUTOUPDATE GITHUB / MAX SPEED
+Viettel HIS Medication Checker - V82.6A13 (HOTFIX) NO ADMIN TEST AUTOUPDATE GITHUB / MAX SPEED
 --------------------------------------------------------------
 Mục tiêu:
-- Giữ nguyên logic kiểm tra thuốc của V79.
-- Dùng 1 UIAutomation COM worker cố định thay vì tạo thread COM mới mỗi scan.
-- Tự reset UIAutomation khi COM/UIA bị lỗi.
-- Không để exception UIA bị nuốt im lặng.
-- Có watchdog + log.
-- Không polling UIAutomation liên tục.
-- Giữ F2/F4/click trigger và Tray.
-- Sửa lỗi check_row() bị chạy 2 lần.
+- Sửa lỗi bắt nhầm "1g" (1 gam) thành 1 giờ (01:00) trong Cách dùng.
+- Sửa lỗi không đọc được DVT trong ngoặc vuông do có dấu cách (VD: "[ 1 viên /ngày]").
+- Giữ nguyên toàn bộ logic V82.6A12 cũ.
 """
 
 import sys
@@ -59,8 +54,8 @@ POPUP_DURATION = 300
 # AUTO UPDATE - GITHUB RAW
 # ============================================================
 
-APP_VERSION = "82.6A12"
-APP_VERSION_CODE = 82612
+APP_VERSION = "82.6A13"
+APP_VERSION_CODE = 82613
 
 # SAU KHI TẠO GITHUB, CHỈ CẦN SỬA 2 DÒNG NÀY 1 LẦN:
 GITHUB_USER = "lucastonybn"
@@ -161,35 +156,15 @@ def _cleanup_legacy_update_files():
 _cleanup_legacy_update_files()
 
 # ============================================================
-# ADMIN
+# NO ADMIN TEST
 # ============================================================
 
-def is_admin():
-    try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
+# Bản test này KHÔNG tự xin quyền Administrator / KHÔNG hiện UAC.
+# Checker sẽ chạy cùng mức quyền với tài khoản Windows hiện tại.
+# Lưu ý: nếu Viettel HIS đang được chạy "Run as administrator" thì
+# Windows có thể hạn chế UI Automation từ checker không-admin.
 
-if not is_admin():
-    script_path = os.path.abspath(sys.argv[0])
-
-    # Nếu chạy .py thì:
-    # ShellExecuteW(exe, runas, python.exe, '"C:\\path\\file.py"', ...)
-    # Nếu chạy EXE thì sys.executable chính là EXE.
-    if script_path.lower().endswith(".py"):
-        params = f'"{script_path}"'
-    else:
-        params = ""
-
-    ctypes.windll.shell32.ShellExecuteW(
-        None,
-        "runas",
-        sys.executable,
-        params,
-        APP_DIR,
-        1
-    )
-    sys.exit(0)
+logger.info("NO_ADMIN_MODE | elevation_request=disabled")
 
 # ============================================================
 # HIDE CONSOLE / UTF-8
@@ -719,9 +694,10 @@ def parse_dose_robust(raw_text):
 
     res["days"] = parse_number(m_days.group(1)) if m_days else 1.0
 
+    # FIX: Cho phép khoảng trắng sau ngoặc vuông/tròn và trước số (VD: "[ 1 viên /ngày]")
     m_exp = re.search(
-        r"[\[\(](\d+(?:[.,]\d+)?)\s*([a-zA-ZÀ-ỹ]+)?\s*/\s*"
-        r"(?:ngày|ngay)[\]\)]",
+        r"[\[\(]\s*(\d+(?:[.,]\d+)?)\s*([a-zA-ZÀ-ỹ]+)?\s*/\s*"
+        r"(?:ngày|ngay)\s*[\]\)]",
         low
     )
 
@@ -791,9 +767,11 @@ def parse_usage_time_points(usage_text):
     text = norm_text(usage_text).lower()
     time_points = []
 
-    # 8h, 8h30, 08:30, 9 giờ...
+    # FIX: Tránh nhầm "1g" (1 gam) thành 1 giờ bằng cách yêu cầu chữ "giờ" hoặc bắt buộc cấu trúc "h/:" 
+    # Hoặc nếu là "g" thì phải đứng riêng hoặc có số phút đi kèm (rất ít khi kê "1g" là thời điểm).
+    # Đổi (?:h|:|g|giờ) thành (?:h|:|giờ) để an toàn. Nếu HIS ghi "8g" thì có thể bổ sung r"\bg\b" cẩn thận hơn.
     for m in re.finditer(
-        r"\b(\d{1,2})\s*(?:h|:|g|giờ)\s*(\d{1,2})?\b",
+        r"\b(\d{1,2})\s*(?:h|:|giờ)\s*(\d{1,2})?\b",
         text,
         flags=re.I
     ):
@@ -2539,7 +2517,7 @@ def main():
         "=================================================="
     )
     logger.info(
-        "VIETTEL HIS MEDICATION CHECKER V82.6A12 STABLE ACTIVE WINDOW START"
+        "VIETTEL HIS MEDICATION CHECKER V82.6A13 NO ADMIN TEST START"
     )
     logger.info(
         "Python=%s",
@@ -2636,8 +2614,9 @@ def main():
             wt.join(timeout=2.0)
 
         logger.info(
-            "VIETTEL HIS MEDICATION CHECKER V82.6A12 STABLE ACTIVE WINDOW EXIT"
+            "VIETTEL HIS MEDICATION CHECKER V82.6A13 NO ADMIN TEST EXIT"
         )
 
 if __name__ == "__main__":
     main()
+
